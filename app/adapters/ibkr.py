@@ -554,15 +554,51 @@ class IbkrAdapter:
         if new_last == old_position.last_price:
             return
         # A real positive tick supersedes the previous-close placeholder.
+        new_mv_native = old_position.quantity * new_last
+        new_pnl_native = (new_last - old_position.avg_cost) * old_position.quantity
+        # Recompute USD using the *current* FX rate. The seed may have had
+        # fx_unavailable=True if the rate hadn't loaded yet; this tick is our
+        # chance to fix it. For USD-denominated positions, mv_usd == mv_native.
+        mv_usd, pnl_usd, fx_is_stale, fx_is_fallback, fx_unavailable = (
+            self._convert_to_usd_sync(
+                old_position.currency, new_mv_native, new_pnl_native,
+            )
+        )
         new_position = replace(
             old_position,
             last_price=new_last,
-            market_value_native=old_position.quantity * new_last,
-            unrealized_pnl_native=(new_last - old_position.avg_cost) * old_position.quantity,
+            market_value_native=new_mv_native,
+            unrealized_pnl_native=new_pnl_native,
+            market_value_usd=mv_usd,
+            unrealized_pnl_usd=pnl_usd,
+            fx_is_stale=fx_is_stale,
+            fx_is_fallback=fx_is_fallback,
+            fx_unavailable=fx_unavailable,
             last_price_is_previous_close=False,
         )
         self._streaming[conid] = (new_position, contract, ticker)
         self._live_positions.set_position(new_position)
+
+    def _convert_to_usd_sync(
+        self, currency: str, mv_native: float, pnl_native: float,
+    ) -> tuple[float, float, bool, bool, bool]:
+        """Synchronous version of _convert_to_usd for use in tick callbacks.
+        Same contract: (mv_usd, pnl_usd, fx_is_stale, fx_is_fallback, fx_unavailable).
+        """
+        if currency == "USD":
+            return mv_native, pnl_native, False, False, False
+        if self._fx_service is None:
+            return 0.0, 0.0, False, False, True
+        try:
+            rate = self._fx_service.get_rate_sync(currency)
+        except ValueError:
+            return 0.0, 0.0, False, False, True
+        if rate is None:
+            return 0.0, 0.0, False, False, True
+        return (
+            mv_native * rate.rate, pnl_native * rate.rate,
+            rate.is_stale, rate.source == "API_FALLBACK", False,
+        )
 
     # ---- account summary (slice 2 minimum; slice 7 fleshes out) -------------
 

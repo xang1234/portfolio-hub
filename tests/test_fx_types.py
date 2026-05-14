@@ -54,10 +54,16 @@ def test_fx_rate_source_can_be_api_fallback():
 # SUPPORTED_FX --------------------------------------------------------------
 
 
-def test_supported_fx_includes_all_eleven_currencies_from_plan():
+def test_supported_fx_includes_planned_currencies():
     from app.core.fx import SUPPORTED_FX
 
-    expected = {"HKD", "JPY", "KRW", "TWD", "CNH", "AUD", "GBP", "EUR", "SGD", "CHF", "CAD"}
+    # The plan's original eleven, plus SEK (added after smoke-test discovered
+    # the user holds Stockholm positions).
+    expected = {
+        "HKD", "JPY", "KRW", "TWD", "CNH",
+        "AUD", "GBP", "EUR", "SGD", "CHF", "CAD",
+        "SEK",
+    }
     assert SUPPORTED_FX == expected
 
 

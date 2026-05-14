@@ -65,6 +65,7 @@ _LOG = logging.getLogger(__name__)
 SUPPORTED_FX: frozenset[str] = frozenset({
     "HKD", "JPY", "KRW", "TWD", "CNH",
     "AUD", "GBP", "EUR", "SGD", "CHF", "CAD",
+    "SEK",  # Stockholmsbörsen (user holds Swedish positions)
 })
 
 
@@ -156,7 +157,7 @@ class FxService:
         store: "Store | None" = None,
         ib: Any | None = None,
         forex_factory: Callable[[str], Any] = _default_forex_factory,
-        api_fetcher: Callable[[], Any] | None = _default_api_fetcher,
+        api_fetcher: Callable[[], Any] | None = None,
         api_poll_interval_s: float = _API_DEFAULT_POLL_INTERVAL_S,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -195,8 +196,16 @@ class FxService:
                 )
                 target = self._ib_rates if rate.source == "IB" else self._api_rates
                 target[currency] = rate
-        # Start the API fallback poll loop (cancellable via stop()).
+        # On fresh boot (empty fx_cache), block briefly on a one-shot API
+        # fetch so we have *some* rate for every supported currency before
+        # the adapter starts building positions. Without this, the seed runs
+        # into a race where the first few positions get fx_unavailable=True
+        # and the USD column shows — until they're touched again by a tick.
         if self._api_fetcher is not None:
+            try:
+                await asyncio.wait_for(self.refresh_from_api(), timeout=3.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
             self._api_task = asyncio.create_task(self._api_poll_loop())
 
     async def stop(self) -> None:
@@ -225,6 +234,13 @@ class FxService:
         self._tickers.clear()
 
     async def get_rate(self, currency: str) -> FxRate | None:
+        return self.get_rate_sync(currency)
+
+    def get_rate_sync(self, currency: str) -> FxRate | None:
+        """Synchronous read of the current rate. Useful in sync callbacks
+        (e.g. the slice-4 ticker handler) where an `await` would require
+        scheduling a task and deferring the update past the next event loop
+        turn. The implementation does no I/O — just dict lookups."""
         if currency == "USD":
             return FxRate(
                 pair="USDUSD",

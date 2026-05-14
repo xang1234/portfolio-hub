@@ -110,7 +110,10 @@ def create_app(
             except Exception:
                 pass
 
-            fx_service = FxService(store=store)
+            # Wire the real public-API fetcher; tests pass api_fetcher=None
+            # or a stub to avoid network calls.
+            from app.core.fx import _default_api_fetcher
+            fx_service = FxService(store=store, api_fetcher=_default_api_fetcher)
             await fx_service.start()
             app.state.fx_service = fx_service
 
