@@ -166,7 +166,10 @@ class FxService:
         self._api_fetcher = api_fetcher
         self._api_poll_interval_s = api_poll_interval_s
         self._clock = clock or (lambda: datetime.now(timezone.utc))
-        self._rates: dict[str, FxRate] = {}
+        # Separate stores per source so we can auto-switch IB→API at read
+        # time when the IB feed goes stale without losing track of either.
+        self._ib_rates: dict[str, FxRate] = {}
+        self._api_rates: dict[str, FxRate] = {}
         self._subscribed: set[str] = set()
         self._tickers: dict[str, Any] = {}
         self._lock = asyncio.Lock()
@@ -174,20 +177,24 @@ class FxService:
 
     async def start(self) -> None:
         # Load last-known rates from disk so USD columns are populated before
-        # the first fresh IB tick or API poll arrives.
+        # the first fresh IB tick or API poll arrives. fx_cache only stores
+        # one row per pair (the latest usable), so we put it in the bucket
+        # matching its source.
         if self._store is not None:
             for currency in SUPPORTED_FX:
                 pair = _pair_for(currency)
                 row = await self._store.get_fx_rate(pair)
                 if row is None:
                     continue
-                self._rates[currency] = FxRate(
+                rate = FxRate(
                     pair=row["pair"],
                     rate=row["rate"],
                     quoted_at=row["quoted_at"],
                     is_stale=False,
                     source=row["source"],
                 )
+                target = self._ib_rates if rate.source == "IB" else self._api_rates
+                target[currency] = rate
         # Start the API fallback poll loop (cancellable via stop()).
         if self._api_fetcher is not None:
             self._api_task = asyncio.create_task(self._api_poll_loop())
@@ -202,6 +209,21 @@ class FxService:
             except (asyncio.CancelledError, Exception):
                 pass
 
+    def attach_ib(self, ib: Any) -> None:
+        """Inject (or replace) the IB instance used for Forex subscriptions.
+
+        Called by IbkrAdapter after connect() so the FxService can call
+        ib.reqMktData for each FX pair seen in the portfolio. Replacing on
+        reconnect means existing subscriptions are silently abandoned — that's
+        fine because ib_async tears them down with the connection itself, and
+        the next ensure_subscribed() call will re-register them.
+        """
+        self._ib = ib
+        # The new IB instance has no live tickers, so reset the bookkeeping
+        # to force ensure_subscribed() to re-create everything.
+        self._subscribed.clear()
+        self._tickers.clear()
+
     async def get_rate(self, currency: str) -> FxRate | None:
         if currency == "USD":
             return FxRate(
@@ -212,18 +234,36 @@ class FxService:
                 source="IB",
             )
         validate_currency(currency)
-        cached = self._rates.get(currency)
-        if cached is None:
+        ib_rate = self._ib_rates.get(currency)
+        api_rate = self._api_rates.get(currency)
+        chosen = self._pick_rate(ib_rate, api_rate)
+        if chosen is None:
             return None
-        # Recompute staleness at read time. Stored rates have is_stale=False
-        # because staleness depends on current time, not when the tick arrived.
-        is_stale = self._compute_staleness(cached)
-        if is_stale == cached.is_stale:
-            return cached
+        is_stale = self._compute_staleness(chosen)
+        if is_stale == chosen.is_stale:
+            return chosen
         return FxRate(
-            pair=cached.pair, rate=cached.rate, quoted_at=cached.quoted_at,
-            is_stale=is_stale, source=cached.source,
+            pair=chosen.pair, rate=chosen.rate, quoted_at=chosen.quoted_at,
+            is_stale=is_stale, source=chosen.source,
         )
+
+    def _pick_rate(
+        self, ib_rate: FxRate | None, api_rate: FxRate | None,
+    ) -> FxRate | None:
+        """Prefer IB unless it's stale AND the API has a fresher value.
+
+        The plan calls this the "auto-switch IB→API". It's per-read, not
+        sticky — a fresh IB tick returning makes the next get_rate() return
+        IB again.
+        """
+        if ib_rate is None:
+            return api_rate
+        if api_rate is None:
+            return ib_rate
+        # Both present — only override IB when it's stale AND API is fresher
+        if self._compute_staleness(ib_rate) and api_rate.quoted_at > ib_rate.quoted_at:
+            return api_rate
+        return ib_rate
 
     def _compute_staleness(self, rate: FxRate) -> bool:
         """An IB rate is stale when it's older than 60s AND the FX market
@@ -247,8 +287,9 @@ class FxService:
     async def set_rate(self, rate: FxRate) -> None:
         currency = rate.pair[:3]
         validate_currency(currency)
+        target = self._ib_rates if rate.source == "IB" else self._api_rates
         async with self._lock:
-            self._rates[currency] = rate
+            target[currency] = rate
         if self._store is not None:
             try:
                 await self._store.put_fx_rate(
@@ -299,7 +340,8 @@ class FxService:
                 is_stale=False,
                 source="IB",
             )
-            self._rates[currency] = rate  # synchronous in-memory update
+            # Synchronous in-memory update so the next get_rate() sees it
+            self._ib_rates[currency] = rate
             if self._store is None:
                 return
             try:

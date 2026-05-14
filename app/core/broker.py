@@ -39,9 +39,13 @@ class Position:
     avg_cost: float                   # native currency
     last_price: float                 # native currency
     market_value_native: float
-    market_value_usd: float           # 0.0 until slice 3 wires FX
+    market_value_usd: float           # 0.0 when fx_unavailable=True
     unrealized_pnl_native: float
-    unrealized_pnl_usd: float         # 0.0 until slice 3 wires FX
+    unrealized_pnl_usd: float         # 0.0 when fx_unavailable=True
+    # Slice 3 FX metadata — defaults keep older test fixtures working
+    fx_is_stale: bool = False         # IB rate older than 60s during market hours → ⚠️
+    fx_is_fallback: bool = False      # rate came from public-API fallback → 📡
+    fx_unavailable: bool = False      # no rate found at all → render —
 
 
 @dataclass

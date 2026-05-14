@@ -19,6 +19,7 @@ from dataclasses import replace
 from typing import Callable, Protocol, Sequence
 
 from app.core.broker import AccountSummary, ConnectionState, Position
+from app.core.fx import FxService
 from app.core.live_positions import LivePositions
 from app.core.names import NameResolver
 from app.core.symbols import canonical_symbol
@@ -65,6 +66,7 @@ class IbkrAdapter:
         ib_factory: Callable[[], _IBLike] = _default_ib_factory,
         store: Store | None = None,
         live_positions: LivePositions | None = None,
+        fx_service: FxService | None = None,
         reconnect_delays: Sequence[float] | None = None,
     ) -> None:
         self._host = host
@@ -73,6 +75,7 @@ class IbkrAdapter:
         self._ib_factory = ib_factory
         self._store = store
         self._live_positions = live_positions
+        self._fx_service = fx_service
         self._reconnect_delays: Sequence[float] = tuple(
             reconnect_delays if reconnect_delays is not None else _DEFAULT_RECONNECT_DELAYS
         )
@@ -125,6 +128,8 @@ class IbkrAdapter:
             self._name_resolver = NameResolver(
                 store=self._store, fetcher=self._fetch_contract_details
             )
+        if self._fx_service is not None:
+            self._fx_service.attach_ib(ib)
         # Register the disconnect handler so we can auto-reconnect when IBKR's
         # daily restart drops the session (or any other transient failure).
         disconnected_event = getattr(ib, "disconnectedEvent", None)
@@ -174,6 +179,15 @@ class IbkrAdapter:
         tickers = await self._ib.reqTickersAsync(*contracts)
         last_prices = {c.conId: _coerce_last(t) for c, t in zip(contracts, tickers)}
 
+        # Make sure FxService has live subscriptions for every non-USD currency
+        # we're about to render. Idempotent — repeated calls are cheap.
+        if self._fx_service is not None:
+            currencies = {p.contract.currency for p in stk_positions} - {"USD"}
+            try:
+                await self._fx_service.ensure_subscribed(currencies)
+            except Exception as exc:
+                _LOG.warning("Failed to ensure FX subscriptions: %s", exc)
+
         out: list[Position] = []
         for ib_pos in stk_positions:
             position = await self._build_position(ib_pos, last_prices)
@@ -200,6 +214,10 @@ class IbkrAdapter:
         mv_native = quantity * last_price
         pnl_native = (last_price - avg_cost) * quantity
 
+        mv_usd, pnl_usd, fx_is_stale, fx_is_fallback, fx_unavailable = (
+            await self._convert_to_usd(contract.currency, mv_native, pnl_native)
+        )
+
         return Position(
             broker=self.name,
             account_id=ib_pos.account,
@@ -214,9 +232,40 @@ class IbkrAdapter:
             avg_cost=avg_cost,
             last_price=last_price,
             market_value_native=mv_native,
-            market_value_usd=0.0,        # filled in slice 3
+            market_value_usd=mv_usd,
             unrealized_pnl_native=pnl_native,
-            unrealized_pnl_usd=0.0,      # filled in slice 3
+            unrealized_pnl_usd=pnl_usd,
+            fx_is_stale=fx_is_stale,
+            fx_is_fallback=fx_is_fallback,
+            fx_unavailable=fx_unavailable,
+        )
+
+    async def _convert_to_usd(
+        self, currency: str, mv_native: float, pnl_native: float,
+    ) -> tuple[float, float, bool, bool, bool]:
+        """Return (mv_usd, pnl_usd, fx_is_stale, fx_is_fallback, fx_unavailable).
+
+        USD-denominated rows pass through 1:1 with all flags False.
+        Rows with no FxService or no rate available come back with USD=0 and
+        fx_unavailable=True so the template knows to render — instead of $0.00.
+        """
+        if currency == "USD":
+            return mv_native, pnl_native, False, False, False
+        if self._fx_service is None:
+            return 0.0, 0.0, False, False, True
+        try:
+            rate = await self._fx_service.get_rate(currency)
+        except ValueError:
+            # CNY or other invalid currency hit at runtime — log and unavailable
+            _LOG.warning("Invalid FX currency on position: %s", currency)
+            return 0.0, 0.0, False, False, True
+        if rate is None:
+            return 0.0, 0.0, False, False, True
+        mv_usd = mv_native * rate.rate
+        pnl_usd = pnl_native * rate.rate
+        return (
+            mv_usd, pnl_usd, rate.is_stale,
+            rate.source == "API_FALLBACK", False,
         )
 
     async def _resolve_name(

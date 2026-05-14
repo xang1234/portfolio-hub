@@ -3,6 +3,15 @@
 {% block header %}
 <div class="header-strip">
     {% include "partials/status_badge.html" %}
+    {% if totals %}
+    <div class="totals">
+        <span class="total-mv-usd" title="Total market value (USD)">${{ "{:,.0f}".format(totals.mv_usd) }}</span>
+        <span class="total-pnl-usd {% if totals.pnl_is_positive %}pnl-positive{% else %}pnl-negative{% endif %}"
+              title="Total unrealized P&amp;L (USD)">{% if totals.pnl_is_positive %}+{% endif %}${{ "{:,.0f}".format(totals.pnl_usd) }}</span>
+        <span class="total-pnl-pct {% if totals.pnl_is_positive %}pnl-positive{% else %}pnl-negative{% endif %}"
+              title="Unrealized P&amp;L %">{% if totals.pnl_is_positive %}+{% endif %}{{ "{:.2f}".format(totals.pnl_pct) }}%</span>
+    </div>
+    {% endif %}
 </div>
 {% endblock %}
 
@@ -15,6 +24,7 @@
             <th class="col-num">Qty</th>
             <th class="col-num">Last</th>
             <th class="col-num">Market Value</th>
+            <th class="col-num">MV USD</th>
         </tr>
     </thead>
     <tbody id="positions-tbody"
