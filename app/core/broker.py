@@ -46,6 +46,10 @@ class Position:
     fx_is_stale: bool = False         # IB rate older than 60s during market hours → ⚠️
     fx_is_fallback: bool = False      # rate came from public-API fallback → 📡
     fx_unavailable: bool = False      # no rate found at all → render —
+    # When the live ticker had no last/close, last_price was filled from
+    # reqHistoricalData (daily-bar close). Template renders a "prev close"
+    # subtext so users know the number isn't ticking live.
+    last_price_is_previous_close: bool = False
 
 
 @dataclass

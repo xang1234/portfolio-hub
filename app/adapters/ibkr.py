@@ -23,6 +23,7 @@ from app.core.fx import FxService
 from app.core.live_positions import LivePositions
 from app.core.names import NameResolver
 from app.core.symbols import canonical_symbol
+from app.core.yahoo_quotes import default_yahoo_fetcher, yahoo_symbol_for
 from app.db.store import Store
 
 
@@ -67,6 +68,7 @@ class IbkrAdapter:
         store: Store | None = None,
         live_positions: LivePositions | None = None,
         fx_service: FxService | None = None,
+        yahoo_quote_fetcher: Callable[[str], object] = default_yahoo_fetcher,
         reconnect_delays: Sequence[float] | None = None,
     ) -> None:
         self._host = host
@@ -76,6 +78,7 @@ class IbkrAdapter:
         self._store = store
         self._live_positions = live_positions
         self._fx_service = fx_service
+        self._yahoo_quote_fetcher = yahoo_quote_fetcher
         self._reconnect_delays: Sequence[float] = tuple(
             reconnect_delays if reconnect_delays is not None else _DEFAULT_RECONNECT_DELAYS
         )
@@ -179,6 +182,19 @@ class IbkrAdapter:
         tickers = await self._ib.reqTickersAsync(*contracts)
         last_prices = {c.conId: _coerce_last(t) for c, t in zip(contracts, tickers)}
 
+        # For positions without a live/delayed last (international markets
+        # without paid market-data subs — TSEJ, SBF, IBIS, etc.), fall back
+        # to the most recent daily-bar close via reqHistoricalData. Mark
+        # these so the row renderer can show a "prev close" subtext.
+        previous_close_set: set[int] = set()
+        for contract in contracts:
+            if last_prices.get(contract.conId, 0.0) > 0:
+                continue
+            prev_close = await self._fetch_previous_close(contract)
+            if prev_close is not None and prev_close > 0:
+                last_prices[contract.conId] = prev_close
+                previous_close_set.add(contract.conId)
+
         # Make sure FxService has live subscriptions for every non-USD currency
         # we're about to render. Idempotent — repeated calls are cheap.
         if self._fx_service is not None:
@@ -190,15 +206,78 @@ class IbkrAdapter:
 
         out: list[Position] = []
         for ib_pos in stk_positions:
-            position = await self._build_position(ib_pos, last_prices)
+            position = await self._build_position(
+                ib_pos, last_prices, previous_close_set,
+            )
             if position is not None:
                 out.append(position)
         return out
+
+    async def _fetch_previous_close(self, contract) -> float | None:
+        """Fall back to last-known close for instruments without a live tick.
+
+        Tries IB historical data first (subscription-independent on some
+        exchanges), then Yahoo Finance for venues IB gates entirely
+        (TSEJ, SBF, IBIS, SFB, etc.). Returns None on total failure so the
+        row degrades to — instead of crashing.
+        """
+        # First try: IB historical. Subscription-independent on US/HK/some others.
+        ib_close = await self._try_ib_historical(contract)
+        if ib_close is not None:
+            return ib_close
+        # Second try: Yahoo Finance EOD. Covers most international venues
+        # where IB gates data behind paid subscriptions.
+        return await self._try_yahoo(contract)
+
+    async def _try_ib_historical(self, contract) -> float | None:
+        req_hist = getattr(self._ib, "reqHistoricalDataAsync", None)
+        if not callable(req_hist):
+            return None
+        try:
+            bars = await req_hist(
+                contract,
+                endDateTime="",
+                durationStr="2 D",
+                barSizeSetting="1 day",
+                whatToShow="TRADES",
+                useRTH=True,
+                formatDate=1,
+            )
+        except Exception as exc:
+            _LOG.debug(
+                "IB historical fallback failed for %s (%s): %s",
+                getattr(contract, "symbol", "?"),
+                getattr(contract, "primaryExchange", "?"),
+                exc,
+            )
+            return None
+        if not bars:
+            return None
+        value = float(getattr(bars[-1], "close", 0.0))
+        return value if value > 0 else None
+
+    async def _try_yahoo(self, contract) -> float | None:
+        if self._yahoo_quote_fetcher is None:
+            return None
+        exchange = getattr(contract, "primaryExchange", "") or getattr(contract, "exchange", "")
+        symbol = yahoo_symbol_for(getattr(contract, "symbol", ""), exchange)
+        if symbol is None:
+            return None
+        try:
+            value = await self._yahoo_quote_fetcher(symbol)
+        except Exception as exc:
+            _LOG.debug("Yahoo fallback raised for %s: %s", symbol, exc)
+            return None
+        if value is None or value <= 0:
+            return None
+        _LOG.info("Used Yahoo EOD fallback for %s = %.4f", symbol, value)
+        return float(value)
 
     async def _build_position(
         self,
         ib_pos,
         last_prices: dict[int, float],
+        previous_close_set: set[int] | None = None,
     ) -> Position | None:
         contract = ib_pos.contract
         native_key = str(contract.conId)
@@ -209,6 +288,9 @@ class IbkrAdapter:
         canonical, name_en, primary_exchange = resolved
 
         last_price = last_prices.get(contract.conId, 0.0)
+        is_prev_close = bool(
+            previous_close_set is not None and contract.conId in previous_close_set
+        )
         quantity = float(ib_pos.position)
         avg_cost = float(ib_pos.avgCost)
         mv_native = quantity * last_price
@@ -238,6 +320,7 @@ class IbkrAdapter:
             fx_is_stale=fx_is_stale,
             fx_is_fallback=fx_is_fallback,
             fx_unavailable=fx_unavailable,
+            last_price_is_previous_close=is_prev_close,
         )
 
     async def _convert_to_usd(

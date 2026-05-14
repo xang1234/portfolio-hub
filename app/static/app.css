@@ -147,6 +147,14 @@ button.status-badge--retry:hover {
     margin-left: 0.25rem;
 }
 
+.position-row .prev-close-note {
+    display: block;
+    color: var(--pico-muted-color);
+    font-size: 0.7rem;
+    font-style: italic;
+    margin-top: 0.1rem;
+}
+
 .empty-state {
     text-align: center;
     padding: 2rem 1rem;

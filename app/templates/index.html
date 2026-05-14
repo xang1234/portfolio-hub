@@ -7,7 +7,7 @@
     <div class="totals">
         <span class="total-mv-usd" title="Total market value (USD)">${{ "{:,.0f}".format(totals.mv_usd) }}</span>
         <span class="total-pnl-usd {% if totals.pnl_is_positive %}pnl-positive{% else %}pnl-negative{% endif %}"
-              title="Total unrealized P&amp;L (USD)">{% if totals.pnl_is_positive %}+{% endif %}${{ "{:,.0f}".format(totals.pnl_usd) }}</span>
+              title="Total unrealized P&amp;L (USD)">{% if totals.pnl_is_positive %}+${{ "{:,.0f}".format(totals.pnl_usd) }}{% else %}-${{ "{:,.0f}".format(-totals.pnl_usd) }}{% endif %}</span>
         <span class="total-pnl-pct {% if totals.pnl_is_positive %}pnl-positive{% else %}pnl-negative{% endif %}"
               title="Unrealized P&amp;L %">{% if totals.pnl_is_positive %}+{% endif %}{{ "{:.2f}".format(totals.pnl_pct) }}%</span>
     </div>

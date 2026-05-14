@@ -7,7 +7,7 @@
     </td>
     <td class="col-num">{{ "{:,.0f}".format(position.quantity) }}</td>
     <td class="col-num">
-        {% if position.last_price > 0 %}{{ "{:,.2f}".format(position.last_price) }}{% else %}—{% endif %}
+        {% if position.last_price > 0 %}{{ "{:,.2f}".format(position.last_price) }}{% if position.last_price_is_previous_close %}<small class="prev-close-note" title="No live market data; showing previous close">prev close</small>{% endif %}{% else %}—{% endif %}
     </td>
     <td class="col-num">
         {% if position.market_value_native > 0 %}{{ "{:,.0f}".format(position.market_value_native) }}<small class="currency">{{ position.currency }}</small>{% else %}—{% endif %}
