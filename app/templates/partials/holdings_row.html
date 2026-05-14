@@ -1,0 +1,14 @@
+<tr class="position-row">
+    <td class="col-name">
+        <span class="flag" aria-label="{{ position.exchange }}">{{ flag_for_exchange(position.exchange) }}</span>
+        <span class="name-en">{{ position.name_en }}</span>
+        <span class="native-symbol">{{ position.native_symbol }}</span>
+    </td>
+    <td class="col-num">{{ "{:,.0f}".format(position.quantity) }}</td>
+    <td class="col-num">
+        {% if position.last_price > 0 %}{{ "{:,.2f}".format(position.last_price) }}{% else %}—{% endif %}
+    </td>
+    <td class="col-num">
+        {% if position.market_value_native > 0 %}{{ "{:,.0f}".format(position.market_value_native) }}<small class="currency">{{ position.currency }}</small>{% else %}—{% endif %}
+    </td>
+</tr>

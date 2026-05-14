@@ -37,36 +37,60 @@ def create_app(*, broker: Broker | None = None) -> FastAPI:
     connects on startup via lifespan. Tests pass a fake adapter and skip lifespan.
     """
 
+    store = None
     if broker is None:
-        from app.adapters.ibkr import IbkrAdapter
-
-        broker = IbkrAdapter(
-            host=os.environ.get("IB_HOST", "ib-gateway"),
-            port=int(os.environ.get("IB_PORT", "4001")),
-            client_id=int(os.environ.get("IB_CLIENT_ID", "1")),
-        )
         manage_lifecycle = True
     else:
         manage_lifecycle = False
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        nonlocal broker, store
         if manage_lifecycle:
+            from app.adapters.ibkr import IbkrAdapter
+            from app.db.store import Store
+
+            data_dir = Path(os.environ.get("DATA_DIR", "./data"))
+            data_dir.mkdir(parents=True, exist_ok=True)
+            store = Store(data_dir / "portfolio.db")
+            try:
+                await store.init_schema()
+            except Exception:
+                pass
+
+            broker = IbkrAdapter(
+                host=os.environ.get("IB_HOST", "ib-gateway"),
+                port=int(os.environ.get("IB_PORT", "4003")),
+                client_id=int(os.environ.get("IB_CLIENT_ID", "1")),
+                store=store,
+            )
+            app.state.broker = broker
             try:
                 await broker.connect()
             except Exception:
                 # Slice 1: tolerate startup failure. Reconnection comes in slice 9.
                 pass
         yield
-        if manage_lifecycle:
+        if manage_lifecycle and broker is not None:
             try:
                 await broker.disconnect()
             except Exception:
                 pass
+            if store is not None:
+                try:
+                    await store.close()
+                except Exception:
+                    pass
 
     app = FastAPI(lifespan=lifespan, title="portfolio-hub")
     app.state.broker = broker
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+    # Expose symbols helpers so templates can compute display data from
+    # canonical fields without polluting the Position dataclass.
+    from app.core.symbols import flag_for_exchange
+
+    templates.env.globals["flag_for_exchange"] = flag_for_exchange
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -84,11 +108,21 @@ def create_app(*, broker: Broker | None = None) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request):
-        connected = await request.app.state.broker.is_connected()
+        broker = request.app.state.broker
+        connected = await broker.is_connected()
+        positions = []
+        if connected:
+            try:
+                positions = await broker.get_positions()
+            except NotImplementedError:
+                # Slice 1 used a stub broker that didn't implement get_positions.
+                # Tolerated until all brokers in production have it.
+                positions = []
+        positions.sort(key=lambda p: p.market_value_native, reverse=True)
         return templates.TemplateResponse(
             request=request,
             name="index.html",
-            context={"connected": connected},
+            context={"connected": connected, "positions": positions},
         )
 
     return app

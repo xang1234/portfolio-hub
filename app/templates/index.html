@@ -7,7 +7,26 @@
 {% endblock %}
 
 {% block content %}
-<article>
-    <p>Portfolio dashboard ready. Slice 1 establishes the connection. Holdings appear in slice 2.</p>
+{% if positions %}
+<table class="holdings-table">
+    <thead>
+        <tr>
+            <th class="col-name">Holding</th>
+            <th class="col-num">Qty</th>
+            <th class="col-num">Last</th>
+            <th class="col-num">Market Value</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for position in positions %}
+        {% include "partials/holdings_row.html" %}
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<article class="empty-state">
+    <p>No positions to display yet.</p>
+    <small>Make sure IB Gateway is connected and your account has holdings.</small>
 </article>
+{% endif %}
 {% endblock %}

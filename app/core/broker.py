@@ -1,11 +1,43 @@
 """Broker abstraction layer.
 
-Slice 1 scope: Protocol stub with lifecycle methods only. Position/AccountSummary
-dataclasses and the get_positions / get_account_summary / get_company_name methods
-arrive in slice 2 and beyond.
+The Broker Protocol is the keystone of multi-broker support. Each adapter
+(IBKR in v1, Futu/Tiger/Longbridge later) implements this contract; the rest
+of the app operates on the normalized Position / AccountSummary types and
+never touches vendor SDKs directly.
 """
 
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
+
+
+@dataclass
+class Position:
+    broker: str                       # "IBKR" | "Futu" | "Tiger" | "Longbridge"
+    account_id: str                   # broker-specific account identifier (IB: "U1234567")
+    native_key: str                   # broker-stable instrument PK (IB: conId as str)
+    canonical_symbol: str             # Longbridge-style "<native>.<country>" e.g. "700.HK"
+    native_symbol: str                # broker-native symbol e.g. "700"
+    exchange: str                     # IB primary exchange code e.g. "SEHK"
+    currency: str                     # ISO 4217 (IB returns "CNH" for offshore renminbi)
+    name_en: str                      # resolved English company name
+    asset_class: str                  # "STK" | "CASH" (ETF arrives as STK)
+    quantity: float
+    avg_cost: float                   # native currency
+    last_price: float                 # native currency
+    market_value_native: float
+    market_value_usd: float           # 0.0 until slice 3 wires FX
+    unrealized_pnl_native: float
+    unrealized_pnl_usd: float         # 0.0 until slice 3 wires FX
+
+
+@dataclass
+class AccountSummary:
+    broker: str
+    account_id: str
+    base_currency: str                # IB lets each account set its own base
+    net_liquidation_usd: float
+    cash_usd: float
+    buying_power_usd: float
 
 
 @runtime_checkable
@@ -17,3 +49,7 @@ class Broker(Protocol):
     async def disconnect(self) -> None: ...
 
     async def is_connected(self) -> bool: ...
+
+    async def get_positions(self) -> list[Position]: ...
+
+    async def get_account_summary(self) -> list[AccountSummary]: ...

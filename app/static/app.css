@@ -34,3 +34,83 @@
     background: rgba(207, 34, 46, 0.15);
     color: var(--pico-color-red-700, #a40e26);
 }
+
+/* Holdings table -------------------------------------------------------- */
+
+.holdings-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 0.5rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.holdings-table thead th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--pico-muted-color);
+    padding: 0.5rem 0.5rem;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.holdings-table .col-num {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.holdings-table tbody td {
+    padding: 0.65rem 0.5rem;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+    vertical-align: middle;
+}
+
+.position-row .col-name {
+    line-height: 1.25;
+}
+
+.position-row .flag {
+    display: inline-block;
+    margin-right: 0.4rem;
+    font-size: 1.1rem;
+    vertical-align: -0.05em;
+}
+
+.position-row .name-en {
+    font-weight: 500;
+}
+
+.position-row .native-symbol {
+    display: block;
+    color: var(--pico-muted-color);
+    font-size: 0.78rem;
+    margin-top: 0.1rem;
+}
+
+.position-row .currency {
+    color: var(--pico-muted-color);
+    font-size: 0.75rem;
+    margin-left: 0.25rem;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 2rem 1rem;
+    color: var(--pico-muted-color);
+}
+.empty-state small {
+    display: block;
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    opacity: 0.75;
+}
+
+/* Narrow phones: tighten everything */
+@media (max-width: 480px) {
+    .holdings-table thead th,
+    .holdings-table tbody td {
+        padding: 0.5rem 0.35rem;
+        font-size: 0.92rem;
+    }
+}

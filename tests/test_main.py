@@ -29,6 +29,12 @@ class FakeAdapter:
     async def is_connected(self) -> bool:
         return self._connected
 
+    async def get_positions(self):  # pragma: no cover — slice 1 tests don't render rows
+        return []
+
+    async def get_account_summary(self):  # pragma: no cover
+        return []
+
 
 def make_client(*, connected: bool) -> TestClient:
     from app.main import create_app
