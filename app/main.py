@@ -89,11 +89,10 @@ def create_app(
                 live_positions=live_positions,
             )
             app.state.broker = broker
-            try:
-                await broker.connect()
-            except Exception:
-                # Slice 1: tolerate startup failure. Reconnection comes in slice 9.
-                pass
+            # start() never raises: on initial-connect failure (e.g. the
+            # gateway is still doing 2FA when the dashboard boots), it
+            # transitions to RECONNECTING and keeps retrying in the background.
+            await broker.start()
         yield
         if manage_lifecycle and broker is not None:
             try:
@@ -139,6 +138,28 @@ def create_app(
                 context={"state": state},
             )
         return JSONResponse({"ibkr": state})
+
+    @app.post("/healthz/retry")
+    async def healthz_retry(request: Request):
+        """Manual retry hook for the DISCONNECTED state.
+
+        Only acts when the adapter is genuinely DISCONNECTED — clicking on
+        a CONNECTED adapter would tear down the live session, and clicking
+        on RECONNECTING would spawn a parallel loop. In both cases we just
+        re-render the current badge.
+        """
+        broker = request.app.state.broker
+        conn_state = await broker.get_connection_state()
+        if conn_state == ConnectionState.DISCONNECTED:
+            start = getattr(broker, "start", None)
+            if callable(start):
+                await start()
+            conn_state = await broker.get_connection_state()
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/status_badge.html",
+            context={"state": _state_to_string(conn_state)},
+        )
 
     @app.get("/stream/holdings")
     async def stream_holdings(request: Request):

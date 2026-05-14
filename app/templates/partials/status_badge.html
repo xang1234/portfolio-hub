@@ -11,9 +11,10 @@
       hx-trigger="every 5s"
       hx-swap="outerHTML">🟡 IBKR reconnecting</span>
 {% else %}
-<span id="ibkr-status"
-      class="status-badge status-badge--disconnected"
-      hx-get="/healthz"
-      hx-trigger="every 5s"
-      hx-swap="outerHTML">🔴 IBKR disconnected</span>
+<button id="ibkr-status"
+        type="button"
+        class="status-badge status-badge--disconnected status-badge--retry"
+        hx-post="/healthz/retry"
+        hx-trigger="click"
+        hx-swap="outerHTML">🔴 IBKR disconnected — click to retry</button>
 {% endif %}

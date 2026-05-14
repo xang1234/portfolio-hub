@@ -40,6 +40,15 @@
     color: var(--pico-color-red-700, #a40e26);
 }
 
+button.status-badge--retry {
+    border: 1px solid rgba(207, 34, 46, 0.4);
+    cursor: pointer;
+    font-family: inherit;
+}
+button.status-badge--retry:hover {
+    background: rgba(207, 34, 46, 0.25);
+}
+
 /* Holdings table -------------------------------------------------------- */
 
 .holdings-table {
