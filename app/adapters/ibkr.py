@@ -14,9 +14,11 @@ Out of scope for this slice:
 """
 
 import logging
+from dataclasses import replace
 from typing import Callable, Protocol
 
 from app.core.broker import AccountSummary, Position
+from app.core.live_positions import LivePositions
 from app.core.names import NameResolver
 from app.core.symbols import canonical_symbol
 from app.db.store import Store
@@ -56,14 +58,19 @@ class IbkrAdapter:
         client_id: int,
         ib_factory: Callable[[], _IBLike] = _default_ib_factory,
         store: Store | None = None,
+        live_positions: LivePositions | None = None,
     ) -> None:
         self._host = host
         self._port = port
         self._client_id = client_id
         self._ib_factory = ib_factory
         self._store = store
+        self._live_positions = live_positions
         self._ib: _IBLike | None = None
         self._name_resolver: NameResolver | None = None
+        # Streaming-mode state — populated only when live_positions is provided.
+        # Maps conId -> (Position, contract, ticker) so tick callbacks can recompute.
+        self._streaming: dict[int, tuple[Position, object, object]] = {}
 
     # ---- lifecycle (slice 1) -------------------------------------------------
 
@@ -84,10 +91,14 @@ class IbkrAdapter:
             self._name_resolver = NameResolver(
                 store=self._store, fetcher=self._fetch_contract_details
             )
+        if self._live_positions is not None:
+            await self._start_streaming()
 
     async def disconnect(self) -> None:
         if self._ib is None:
             return
+        if self._live_positions is not None:
+            self._stop_streaming()
         self._ib.disconnect()
         self._ib = None
 
@@ -228,6 +239,90 @@ class IbkrAdapter:
 
         name_en = (getattr(details, "longName", "") or "").strip()
         return canonical, name_en
+
+    # ---- streaming (slice 4) ------------------------------------------------
+
+    async def _start_streaming(self) -> None:
+        """Seed live_positions with the initial snapshot and subscribe to
+        streaming reqMktData for each STK contract. Each tick updates the
+        corresponding Position in live_positions."""
+        assert self._ib is not None and self._live_positions is not None
+        initial_positions = await self.get_positions()
+        for position in initial_positions:
+            self._live_positions.set_position(position)
+            try:
+                conid = int(position.native_key)
+            except ValueError:
+                continue
+            # Re-fetch the Contract object — we need it for reqMktData
+            contract = await self._contract_for_position(position)
+            if contract is None:
+                continue
+            ticker = self._ib.reqMktData(contract, "", False, False)
+            self._streaming[conid] = (position, contract, ticker)
+            # Subscribe to update events; ib_async fires this on every tick
+            update_event = getattr(ticker, "updateEvent", None)
+            if update_event is not None:
+                update_event += self._on_ticker_update
+
+    async def _contract_for_position(self, position: Position):
+        """Recover the Contract for a Position by looking up via conId in IB.
+
+        ib_async stores recent contracts internally; reqContractDetails is the
+        portable way to round-trip from a conId back to a usable Contract object.
+        """
+        if self._ib is None:
+            return None
+        from ib_async import Contract  # imported lazily so unit tests don't need ib_async
+
+        c = Contract(conId=int(position.native_key))
+        try:
+            details_list = await self._ib.reqContractDetailsAsync(c)
+        except Exception:
+            return None
+        if not details_list:
+            return None
+        return details_list[0].contract
+
+    def _stop_streaming(self) -> None:
+        if self._ib is None:
+            return
+        for conid, (_pos, contract, ticker) in list(self._streaming.items()):
+            update_event = getattr(ticker, "updateEvent", None)
+            if update_event is not None:
+                try:
+                    update_event -= self._on_ticker_update
+                except Exception:
+                    pass
+            try:
+                self._ib.cancelMktData(contract)
+            except Exception:
+                pass
+        self._streaming.clear()
+
+    def _on_ticker_update(self, ticker) -> None:
+        """Callback invoked by ib_async on every tick for a subscribed contract."""
+        if self._live_positions is None:
+            return
+        try:
+            conid = int(ticker.contract.conId)
+        except (AttributeError, TypeError, ValueError):
+            return
+        entry = self._streaming.get(conid)
+        if entry is None:
+            return
+        old_position, contract, _ticker_ref = entry
+        new_last = _coerce_last(ticker)
+        if new_last == old_position.last_price:
+            return
+        new_position = replace(
+            old_position,
+            last_price=new_last,
+            market_value_native=old_position.quantity * new_last,
+            unrealized_pnl_native=(new_last - old_position.avg_cost) * old_position.quantity,
+        )
+        self._streaming[conid] = (new_position, contract, ticker)
+        self._live_positions.set_position(new_position)
 
     # ---- account summary (slice 2 minimum; slice 7 fleshes out) -------------
 
