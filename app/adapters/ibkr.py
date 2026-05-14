@@ -113,6 +113,16 @@ class IbkrAdapter:
             await self._start_streaming()
 
     async def disconnect(self) -> None:
+        # Cancel any in-flight reconnect loop first so it can't race ahead and
+        # re-open the connection right after we close it.
+        task = self._reconnect_task
+        self._reconnect_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
         if self._ib is None:
             self._connection_state = ConnectionState.DISCONNECTED
             return
@@ -283,25 +293,32 @@ class IbkrAdapter:
 
         After backoff exhaustion (the last delay has been tried), transitions
         to DISCONNECTED — the user can manually restart at that point.
+        If the task is cancelled (explicit disconnect()), exits silently.
         """
-        for attempt, delay in enumerate(self._reconnect_delays, start=1):
-            _LOG.info("Reconnect attempt %d will fire in %.1fs", attempt, delay)
-            await asyncio.sleep(delay)
-            if self._connection_state == ConnectionState.CONNECTED:
-                # Something else reconnected us (manual connect()), stop.
-                return
-            try:
-                # Tear down any stale IB ref before trying fresh
-                self._ib = None
-                self._streaming.clear()
-                await self.connect()
-                _LOG.info("Reconnect attempt %d succeeded", attempt)
-                return
-            except Exception as exc:
-                _LOG.warning("Reconnect attempt %d failed: %s", attempt, exc)
-                continue
-        _LOG.error("Backoff exhausted after %d attempts; staying DISCONNECTED", len(self._reconnect_delays))
-        self._connection_state = ConnectionState.DISCONNECTED
+        try:
+            for attempt, delay in enumerate(self._reconnect_delays, start=1):
+                _LOG.info("Reconnect attempt %d will fire in %.1fs", attempt, delay)
+                await asyncio.sleep(delay)
+                if self._connection_state == ConnectionState.CONNECTED:
+                    # Something else reconnected us (manual connect()), stop.
+                    return
+                try:
+                    # Tear down any stale IB ref before trying fresh
+                    self._ib = None
+                    self._streaming.clear()
+                    await self.connect()
+                    _LOG.info("Reconnect attempt %d succeeded", attempt)
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    _LOG.warning("Reconnect attempt %d failed: %s", attempt, exc)
+                    continue
+            _LOG.error("Backoff exhausted after %d attempts; staying DISCONNECTED", len(self._reconnect_delays))
+            self._connection_state = ConnectionState.DISCONNECTED
+        except asyncio.CancelledError:
+            _LOG.info("Reconnect loop cancelled")
+            raise
 
     # ---- streaming (slice 4) ------------------------------------------------
 
