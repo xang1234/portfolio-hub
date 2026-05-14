@@ -546,13 +546,20 @@ class IbkrAdapter:
             return
         old_position, contract, _ticker_ref = entry
         new_last = _coerce_last(ticker)
+        # Null tick (no data permission, off-hours snapshot, etc.) means "I
+        # don't know the price right now," not "the price is zero." Don't
+        # clobber the seeded Yahoo prev-close or any real previous tick.
+        if new_last <= 0:
+            return
         if new_last == old_position.last_price:
             return
+        # A real positive tick supersedes the previous-close placeholder.
         new_position = replace(
             old_position,
             last_price=new_last,
             market_value_native=old_position.quantity * new_last,
             unrealized_pnl_native=(new_last - old_position.avg_cost) * old_position.quantity,
+            last_price_is_previous_close=False,
         )
         self._streaming[conid] = (new_position, contract, ticker)
         self._live_positions.set_position(new_position)
