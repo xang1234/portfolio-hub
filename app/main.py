@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sse_starlette.sse import EventSourceResponse
 
-from app.core.broker import Broker, Position
+from app.core.broker import Broker, ConnectionState, Position
 from app.core.live_positions import LivePositions, stream_events
 
 
@@ -30,6 +30,17 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 def _is_htmx_request(request: Request) -> bool:
     return request.headers.get("HX-Request", "").lower() == "true"
+
+
+_STATE_STRINGS = {
+    ConnectionState.CONNECTED: "connected",
+    ConnectionState.RECONNECTING: "reconnecting",
+    ConnectionState.DISCONNECTED: "disconnected",
+}
+
+
+def _state_to_string(state: ConnectionState) -> str:
+    return _STATE_STRINGS[state]
 
 
 def create_app(
@@ -119,14 +130,14 @@ def create_app(
 
     @app.get("/healthz")
     async def healthz(request: Request):
-        connected = await request.app.state.broker.is_connected()
+        conn_state = await request.app.state.broker.get_connection_state()
+        state = _state_to_string(conn_state)
         if _is_htmx_request(request):
             return templates.TemplateResponse(
                 request=request,
                 name="partials/status_badge.html",
-                context={"connected": connected},
+                context={"state": state},
             )
-        state = "connected" if connected else "disconnected"
         return JSONResponse({"ibkr": state})
 
     @app.get("/stream/holdings")
@@ -145,12 +156,13 @@ def create_app(
     async def index(request: Request):
         broker = request.app.state.broker
         live = request.app.state.live_positions
-        connected = await broker.is_connected()
+        conn_state = await broker.get_connection_state()
+        state = _state_to_string(conn_state)
         # Prefer the live, tick-updated snapshot when it has data; otherwise
         # fall back to a direct broker.get_positions() fetch (covers the slice
         # 1/2 test path where live_positions is never seeded).
         positions = live.get_all()
-        if not positions and connected:
+        if not positions and conn_state == ConnectionState.CONNECTED:
             try:
                 positions = await broker.get_positions()
             except NotImplementedError:
@@ -159,7 +171,7 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="index.html",
-            context={"connected": connected, "positions": positions},
+            context={"state": state, "positions": positions},
         )
 
     return app

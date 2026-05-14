@@ -7,7 +7,21 @@ never touches vendor SDKs directly.
 """
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Protocol, runtime_checkable
+
+
+class ConnectionState(str, Enum):
+    """The broker connection's state from the dashboard's perspective.
+
+    CONNECTED:    gateway responsive, market data flowing
+    RECONNECTING: lost the gateway, auto-retrying with exponential backoff
+    DISCONNECTED: not connected (initial state or after backoff exhausted)
+    """
+
+    CONNECTED = "CONNECTED"
+    RECONNECTING = "RECONNECTING"
+    DISCONNECTED = "DISCONNECTED"
 
 
 @dataclass
@@ -49,6 +63,8 @@ class Broker(Protocol):
     async def disconnect(self) -> None: ...
 
     async def is_connected(self) -> bool: ...
+
+    async def get_connection_state(self) -> ConnectionState: ...
 
     async def get_positions(self) -> list[Position]: ...
 
