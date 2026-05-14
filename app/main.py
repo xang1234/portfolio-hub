@@ -18,8 +18,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from sse_starlette.sse import EventSourceResponse
 
-from app.core.broker import Broker
+from app.core.broker import Broker, Position
+from app.core.live_positions import LivePositions, stream_events
 
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -30,11 +32,18 @@ def _is_htmx_request(request: Request) -> bool:
     return request.headers.get("HX-Request", "").lower() == "true"
 
 
-def create_app(*, broker: Broker | None = None) -> FastAPI:
-    """Build a FastAPI app with the given broker injected.
+def create_app(
+    *,
+    broker: Broker | None = None,
+    live_positions: LivePositions | None = None,
+) -> FastAPI:
+    """Build a FastAPI app with the given broker (and optional LivePositions).
 
     When ``broker`` is None, the app constructs an IbkrAdapter from env vars and
     connects on startup via lifespan. Tests pass a fake adapter and skip lifespan.
+
+    ``live_positions`` is the observable in-memory snapshot the SSE handler
+    streams from. If None, a fresh LivePositions is created.
     """
 
     store = None
@@ -42,6 +51,9 @@ def create_app(*, broker: Broker | None = None) -> FastAPI:
         manage_lifecycle = True
     else:
         manage_lifecycle = False
+
+    if live_positions is None:
+        live_positions = LivePositions()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -63,6 +75,7 @@ def create_app(*, broker: Broker | None = None) -> FastAPI:
                 port=int(os.environ.get("IB_PORT", "4003")),
                 client_id=int(os.environ.get("IB_CLIENT_ID", "1")),
                 store=store,
+                live_positions=live_positions,
             )
             app.state.broker = broker
             try:
@@ -84,6 +97,7 @@ def create_app(*, broker: Broker | None = None) -> FastAPI:
 
     app = FastAPI(lifespan=lifespan, title="portfolio-hub")
     app.state.broker = broker
+    app.state.live_positions = live_positions
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
     # Expose symbols helpers so templates can compute display data from
@@ -91,6 +105,15 @@ def create_app(*, broker: Broker | None = None) -> FastAPI:
     from app.core.symbols import flag_for_exchange
 
     templates.env.globals["flag_for_exchange"] = flag_for_exchange
+
+    def render_rows(positions: list[Position]) -> str:
+        if not positions:
+            return ""
+        template = templates.get_template("partials/holdings_row.html")
+        return "".join(
+            template.render({"position": p, "flag_for_exchange": flag_for_exchange})
+            for p in positions
+        )
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -106,17 +129,31 @@ def create_app(*, broker: Broker | None = None) -> FastAPI:
         state = "connected" if connected else "disconnected"
         return JSONResponse({"ibkr": state})
 
+    @app.get("/stream/holdings")
+    async def stream_holdings(request: Request):
+        """SSE endpoint streaming row-level deltas of the current portfolio.
+
+        The HTMX SSE extension on the client connects via `sse-connect` and
+        listens for named events: 'snapshot' (initial full tbody on connect)
+        and 'positions' (delta — only changed rows, with hx-swap-oob).
+        """
+        live = request.app.state.live_positions
+        generator = stream_events(live, render_rows)
+        return EventSourceResponse(generator)
+
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request):
         broker = request.app.state.broker
+        live = request.app.state.live_positions
         connected = await broker.is_connected()
-        positions = []
-        if connected:
+        # Prefer the live, tick-updated snapshot when it has data; otherwise
+        # fall back to a direct broker.get_positions() fetch (covers the slice
+        # 1/2 test path where live_positions is never seeded).
+        positions = live.get_all()
+        if not positions and connected:
             try:
                 positions = await broker.get_positions()
             except NotImplementedError:
-                # Slice 1 used a stub broker that didn't implement get_positions.
-                # Tolerated until all brokers in production have it.
                 positions = []
         positions.sort(key=lambda p: p.market_value_native, reverse=True)
         return templates.TemplateResponse(

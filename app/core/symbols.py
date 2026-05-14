@@ -23,6 +23,7 @@ IB_EXCHANGE_TO_SUFFIX: dict[str, str] = {
     "HKEX": "HK",
     # Taiwan (NEVER grouped with mainland China)
     "TWSE": "TW",
+    "TPEX": "TW",      # Taiwan OTC market (distinct from TWSE main board)
     # Mainland China
     "SSE": "SH",
     "SZSE": "SZ",
@@ -30,7 +31,8 @@ IB_EXCHANGE_TO_SUFFIX: dict[str, str] = {
     "TSEJ": "JP",
     "OSE": "JP",
     # South Korea
-    "KSE": "KR",
+    "KSE": "KR",       # legacy name
+    "KRX": "KR",       # current IB code for Korea Exchange
     "KOSDAQ": "KR",
     # Australia
     "ASX": "AU",
@@ -46,6 +48,19 @@ IB_EXCHANGE_TO_SUFFIX: dict[str, str] = {
     # Canada
     "TSX": "CA",
     "TSXV": "CA",
+    # Germany
+    "IBIS": "DE",      # Xetra / Frankfurt
+    "FWB": "DE",
+    # France
+    "SBF": "FR",       # Euronext Paris
+    # Netherlands
+    "AEB": "NL",       # Euronext Amsterdam
+    # Spain
+    "BM": "ES",        # Bolsa de Madrid
+    # Italy
+    "BVME": "IT",      # Borsa Italiana
+    # Sweden
+    "SFB": "SE",       # Stockholmsbörsen (Nasdaq Stockholm)
 }
 
 # Country-suffix → flag emoji.
@@ -62,6 +77,12 @@ _SUFFIX_TO_FLAG: dict[str, str] = {
     "SG": "🇸🇬",
     "CH": "🇨🇭",
     "CA": "🇨🇦",
+    "DE": "🇩🇪",
+    "FR": "🇫🇷",
+    "NL": "🇳🇱",
+    "ES": "🇪🇸",
+    "IT": "🇮🇹",
+    "SE": "🇸🇪",
 }
 
 

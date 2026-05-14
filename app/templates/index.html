@@ -17,7 +17,10 @@
             <th class="col-num">Market Value</th>
         </tr>
     </thead>
-    <tbody>
+    <tbody id="positions-tbody"
+           hx-ext="sse"
+           sse-connect="/stream/holdings"
+           sse-swap="snapshot,positions">
         {% for position in positions %}
         {% include "partials/holdings_row.html" %}
         {% endfor %}

@@ -124,3 +124,60 @@ def test_flag_for_unknown_exchange_raises():
 
     with pytest.raises(ValueError, match="unknown exchange"):
         flag_for_exchange("MARS-EXCHANGE")
+
+
+# Additional IB exchange codes encountered live on real accounts --------------
+
+
+def test_krx_korea_exchange_maps_to_kr_suffix():
+    """KRX is IB's actual code for Korea Exchange; KSE was the legacy name."""
+    from app.core.symbols import canonical_symbol
+
+    assert canonical_symbol("005930", "KRX") == "005930.KR"
+
+
+def test_krx_korea_exchange_flag_is_kr():
+    from app.core.symbols import flag_for_exchange
+
+    assert flag_for_exchange("KRX") == "🇰🇷"
+
+
+def test_tpex_taipei_otc_exchange_maps_to_tw_suffix_not_cn():
+    """TPEX is Taiwan's OTC market, distinct from TWSE main board, but still
+    a Taiwan instrument — must be 🇹🇼, NOT 🇨🇳."""
+    from app.core.symbols import canonical_symbol, flag_for_exchange
+
+    assert canonical_symbol("3105", "TPEX") == "3105.TW"
+    assert flag_for_exchange("TPEX") == "🇹🇼"
+
+
+def test_ibis_xetra_frankfurt_maps_to_de_suffix():
+    """IBIS is IB's code for Xetra (Frankfurt)."""
+    from app.core.symbols import canonical_symbol, flag_for_exchange
+
+    assert canonical_symbol("SAP", "IBIS") == "SAP.DE"
+    assert flag_for_exchange("IBIS") == "🇩🇪"
+
+
+def test_sbf_euronext_paris_maps_to_fr_suffix():
+    """SBF is IB's code for Euronext Paris."""
+    from app.core.symbols import canonical_symbol, flag_for_exchange
+
+    assert canonical_symbol("MC", "SBF") == "MC.FR"
+    assert flag_for_exchange("SBF") == "🇫🇷"
+
+
+def test_aeb_euronext_amsterdam_maps_to_nl_suffix():
+    """AEB is IB's code for Euronext Amsterdam."""
+    from app.core.symbols import canonical_symbol, flag_for_exchange
+
+    assert canonical_symbol("ASML", "AEB") == "ASML.NL"
+    assert flag_for_exchange("AEB") == "🇳🇱"
+
+
+def test_sfb_stockholm_maps_to_se_suffix():
+    """SFB is IB's code for Stockholmsbörsen (Nasdaq Stockholm)."""
+    from app.core.symbols import canonical_symbol, flag_for_exchange
+
+    assert canonical_symbol("VOLV-B", "SFB") == "VOLV-B.SE"
+    assert flag_for_exchange("SFB") == "🇸🇪"
