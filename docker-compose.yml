@@ -10,10 +10,12 @@ services:
       TWOFA_DEVICE: ${TWOFA_DEVICE:-mobile}
       RELOGIN_AFTER_TWOFA_TIMEOUT: ${RELOGIN_AFTER_TWOFA_TIMEOUT:-yes}
       READ_ONLY_API: ${READ_ONLY_API:-yes}
-      TRUSTED_IPS: ${TRUSTED_IPS:-127.0.0.1,172.16.0.0/12}
+      # TRUSTED_IPS is NOT an env var the gnzsnz image processes. We control
+      # TrustedIPs by bind-mounting our own jts.ini.tmpl below.
       TIME_ZONE: ${TZ:-Asia/Singapore}
     volumes:
-      - ib-gateway-config:/root/Jts
+      - ib-gateway-config:/home/ibgateway/Jts
+      - ./gateway/jts.ini.tmpl:/home/ibgateway/Jts/jts.ini.tmpl:ro
     # Port 4001/4002 are NOT exposed to the host. Only the dashboard service
     # reaches the gateway, over the internal Docker network.
     expose:
