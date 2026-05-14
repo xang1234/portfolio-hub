@@ -1,0 +1,36 @@
+.app-header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    padding: 0.5rem 1rem;
+    background: var(--pico-background-color);
+    border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.header-strip {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-height: 44px;
+}
+
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    line-height: 1.2;
+}
+
+.status-badge--connected {
+    background: rgba(46, 160, 67, 0.15);
+    color: var(--pico-color-green-700, #1f7a32);
+}
+
+.status-badge--disconnected {
+    background: rgba(207, 34, 46, 0.15);
+    color: var(--pico-color-red-700, #a40e26);
+}

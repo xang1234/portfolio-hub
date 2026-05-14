@@ -1,0 +1,13 @@
+{% if connected %}
+<span id="ibkr-status"
+      class="status-badge status-badge--connected"
+      hx-get="/healthz"
+      hx-trigger="every 5s"
+      hx-swap="outerHTML">🟢 IBKR connected</span>
+{% else %}
+<span id="ibkr-status"
+      class="status-badge status-badge--disconnected"
+      hx-get="/healthz"
+      hx-trigger="every 5s"
+      hx-swap="outerHTML">🔴 IBKR disconnected</span>
+{% endif %}

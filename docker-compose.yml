@@ -1,0 +1,46 @@
+services:
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    container_name: portfolio-hub-ib-gateway
+    restart: unless-stopped
+    environment:
+      TWS_USERID: ${IB_USER}
+      TWS_PASSWORD: ${IB_PASS}
+      TRADING_MODE: ${TRADING_MODE:-live}
+      TWOFA_DEVICE: ${TWOFA_DEVICE:-mobile}
+      RELOGIN_AFTER_TWOFA_TIMEOUT: ${RELOGIN_AFTER_TWOFA_TIMEOUT:-yes}
+      READ_ONLY_API: ${READ_ONLY_API:-yes}
+      TRUSTED_IPS: ${TRUSTED_IPS:-127.0.0.1,172.16.0.0/12}
+      TIME_ZONE: ${TZ:-Asia/Singapore}
+    volumes:
+      - ib-gateway-config:/root/Jts
+    # Port 4001/4002 are NOT exposed to the host. Only the dashboard service
+    # reaches the gateway, over the internal Docker network.
+    expose:
+      - "4001"
+      - "4002"
+
+  dashboard:
+    build: .
+    container_name: portfolio-hub-dashboard
+    restart: unless-stopped
+    environment:
+      IB_HOST: ${IB_HOST:-ib-gateway}
+      IB_PORT: ${IB_PORT:-4001}
+      IB_CLIENT_ID: ${IB_CLIENT_ID:-1}
+      BROKERS_ENABLED: ${BROKERS_ENABLED:-ibkr}
+      TZ: ${TZ:-Asia/Singapore}
+    volumes:
+      - ./data:/app/data
+    # Bind to the loopback interface only. On a Tailscale-equipped host, the
+    # Tailnet interface picks this up via Tailscale Serve / hostname resolution
+    # without exposing 8080 on a public network.
+    ports:
+      - "${DASHBOARD_PORT:-8080}:8080"
+    depends_on:
+      ib-gateway:
+        condition: service_started
+
+volumes:
+  ib-gateway-config:
+    name: portfolio-hub-ib-gateway-config
