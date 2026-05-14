@@ -89,11 +89,10 @@ def create_app(
                 live_positions=live_positions,
             )
             app.state.broker = broker
-            try:
-                await broker.connect()
-            except Exception:
-                # Slice 1: tolerate startup failure. Reconnection comes in slice 9.
-                pass
+            # start() never raises: on initial-connect failure (e.g. the
+            # gateway is still doing 2FA when the dashboard boots), it
+            # transitions to RECONNECTING and keeps retrying in the background.
+            await broker.start()
         yield
         if manage_lifecycle and broker is not None:
             try:

@@ -86,6 +86,27 @@ class IbkrAdapter:
 
     # ---- lifecycle (slice 1) -------------------------------------------------
 
+    async def start(self) -> None:
+        """Boot-path entry: connect, and if that fails, drop into the reconnect
+        loop instead of leaving the adapter permanently DISCONNECTED.
+
+        Why this exists: slice 9's auto-reconnect is wired to
+        ``disconnectedEvent``, which only fires AFTER a successful connect. If
+        the gateway is still doing 2FA when the dashboard boots, the initial
+        connect times out and there's no event to drive recovery. ``start()``
+        bridges that gap by treating an initial failure as a synthetic
+        disconnect — same backoff schedule, same eventual recovery.
+
+        Unlike ``connect()``, this never raises. The FastAPI lifespan can call
+        it freely without wrapping in try/except.
+        """
+        try:
+            await self.connect()
+            return
+        except Exception as exc:
+            _LOG.warning("Initial gateway connect failed; entering RECONNECTING: %s", exc)
+            self._handle_disconnect()
+
     async def connect(self) -> None:
         ib = self._ib_factory()
         await ib.connectAsync(self._host, self._port, clientId=self._client_id)
