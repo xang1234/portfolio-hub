@@ -82,3 +82,55 @@ class Store:
         if row is None:
             return None
         return (row[0], row[1])
+
+    # ---- fx_cache (slice 3) -------------------------------------------------
+
+    async def put_fx_rate(
+        self,
+        *,
+        pair: str,
+        rate: float,
+        source: str,
+        quoted_at: datetime,
+    ) -> None:
+        """Upsert the latest rate for `pair`. updated_at always advances to now()."""
+        conn = await self._connection()
+        await conn.execute(
+            """
+            INSERT INTO fx_cache(pair, rate, source, quoted_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(pair) DO UPDATE SET
+                rate       = excluded.rate,
+                source     = excluded.source,
+                quoted_at  = excluded.quoted_at,
+                updated_at = excluded.updated_at
+            """,
+            (pair, rate, source, quoted_at.isoformat(), _utcnow().isoformat()),
+        )
+        await conn.commit()
+
+    async def get_fx_rate(self, pair: str) -> dict | None:
+        """Return the cached row for `pair`, or None if not present.
+
+        Returned dict keys: pair, rate, source, quoted_at, updated_at.
+        Timestamps are parsed back to aware datetime objects.
+        """
+        conn = await self._connection()
+        async with conn.execute(
+            """
+            SELECT pair, rate, source, quoted_at, updated_at
+            FROM fx_cache
+            WHERE pair = ?
+            """,
+            (pair,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return {
+            "pair": row[0],
+            "rate": row[1],
+            "source": row[2],
+            "quoted_at": datetime.fromisoformat(row[3]),
+            "updated_at": datetime.fromisoformat(row[4]),
+        }
