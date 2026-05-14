@@ -59,6 +59,8 @@ IB_EXCHANGE_TO_SUFFIX: dict[str, str] = {
     "BM": "ES",        # Bolsa de Madrid
     # Italy
     "BVME": "IT",      # Borsa Italiana
+    # Sweden
+    "SFB": "SE",       # Stockholmsbörsen (Nasdaq Stockholm)
 }
 
 # Country-suffix → flag emoji.
@@ -80,6 +82,7 @@ _SUFFIX_TO_FLAG: dict[str, str] = {
     "NL": "🇳🇱",
     "ES": "🇪🇸",
     "IT": "🇮🇹",
+    "SE": "🇸🇪",
 }
 
 

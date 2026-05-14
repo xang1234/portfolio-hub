@@ -173,3 +173,11 @@ def test_aeb_euronext_amsterdam_maps_to_nl_suffix():
 
     assert canonical_symbol("ASML", "AEB") == "ASML.NL"
     assert flag_for_exchange("AEB") == "🇳🇱"
+
+
+def test_sfb_stockholm_maps_to_se_suffix():
+    """SFB is IB's code for Stockholmsbörsen (Nasdaq Stockholm)."""
+    from app.core.symbols import canonical_symbol, flag_for_exchange
+
+    assert canonical_symbol("VOLV-B", "SFB") == "VOLV-B.SE"
+    assert flag_for_exchange("SFB") == "🇸🇪"
