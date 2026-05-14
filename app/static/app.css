@@ -30,6 +30,11 @@
     color: var(--pico-color-green-700, #1f7a32);
 }
 
+.status-badge--reconnecting {
+    background: rgba(212, 169, 13, 0.15);
+    color: var(--pico-color-yellow-700, #8a6500);
+}
+
 .status-badge--disconnected {
     background: rgba(207, 34, 46, 0.15);
     color: var(--pico-color-red-700, #a40e26);

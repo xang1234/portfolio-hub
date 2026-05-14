@@ -13,11 +13,12 @@ Out of scope for this slice:
   - Reconnection on disconnect (slice 9)
 """
 
+import asyncio
 import logging
 from dataclasses import replace
-from typing import Callable, Protocol
+from typing import Callable, Protocol, Sequence
 
-from app.core.broker import AccountSummary, Position
+from app.core.broker import AccountSummary, ConnectionState, Position
 from app.core.live_positions import LivePositions
 from app.core.names import NameResolver
 from app.core.symbols import canonical_symbol
@@ -25,6 +26,11 @@ from app.db.store import Store
 
 
 _LOG = logging.getLogger(__name__)
+
+# Production backoff schedule: ~5s, 15s, 60s, then stay at 60s. IBKR's daily
+# restart usually completes within 1-2 minutes; capping at 60s avoids hammering
+# the gateway while keeping recovery within a few minutes worst-case.
+_DEFAULT_RECONNECT_DELAYS: Sequence[float] = (5.0, 15.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0)
 
 
 class _IBLike(Protocol):
@@ -59,6 +65,7 @@ class IbkrAdapter:
         ib_factory: Callable[[], _IBLike] = _default_ib_factory,
         store: Store | None = None,
         live_positions: LivePositions | None = None,
+        reconnect_delays: Sequence[float] | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -66,11 +73,16 @@ class IbkrAdapter:
         self._ib_factory = ib_factory
         self._store = store
         self._live_positions = live_positions
+        self._reconnect_delays: Sequence[float] = tuple(
+            reconnect_delays if reconnect_delays is not None else _DEFAULT_RECONNECT_DELAYS
+        )
         self._ib: _IBLike | None = None
         self._name_resolver: NameResolver | None = None
         # Streaming-mode state — populated only when live_positions is provided.
         # Maps conId -> (Position, contract, ticker) so tick callbacks can recompute.
         self._streaming: dict[int, tuple[Position, object, object]] = {}
+        self._connection_state: ConnectionState = ConnectionState.DISCONNECTED
+        self._reconnect_task: asyncio.Task | None = None
 
     # ---- lifecycle (slice 1) -------------------------------------------------
 
@@ -87,23 +99,44 @@ class IbkrAdapter:
             except Exception:
                 pass
         self._ib = ib
+        self._connection_state = ConnectionState.CONNECTED
         if self._store is not None:
             self._name_resolver = NameResolver(
                 store=self._store, fetcher=self._fetch_contract_details
             )
+        # Register the disconnect handler so we can auto-reconnect when IBKR's
+        # daily restart drops the session (or any other transient failure).
+        disconnected_event = getattr(ib, "disconnectedEvent", None)
+        if disconnected_event is not None:
+            disconnected_event += self._handle_disconnect
         if self._live_positions is not None:
             await self._start_streaming()
 
     async def disconnect(self) -> None:
+        # Cancel any in-flight reconnect loop first so it can't race ahead and
+        # re-open the connection right after we close it.
+        task = self._reconnect_task
+        self._reconnect_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
         if self._ib is None:
+            self._connection_state = ConnectionState.DISCONNECTED
             return
         if self._live_positions is not None:
             self._stop_streaming()
         self._ib.disconnect()
         self._ib = None
+        self._connection_state = ConnectionState.DISCONNECTED
 
     async def is_connected(self) -> bool:
         return self._ib is not None and self._ib.isConnected()
+
+    async def get_connection_state(self) -> ConnectionState:
+        return self._connection_state
 
     # ---- positions (slice 2) -------------------------------------------------
 
@@ -239,6 +272,53 @@ class IbkrAdapter:
 
         name_en = (getattr(details, "longName", "") or "").strip()
         return canonical, name_en
+
+    # ---- reconnect (slice 9) ------------------------------------------------
+
+    def _handle_disconnect(self) -> None:
+        """Called by ib_async when the TCP connection drops.
+
+        Transitions immediately to RECONNECTING and spawns the reconnect loop.
+        Idempotent — if we're already reconnecting, leaves the existing task alone.
+        """
+        if self._connection_state == ConnectionState.RECONNECTING:
+            return
+        self._connection_state = ConnectionState.RECONNECTING
+        _LOG.warning("Gateway disconnected; entering RECONNECTING state")
+        if self._reconnect_task is None or self._reconnect_task.done():
+            self._reconnect_task = asyncio.create_task(self._reconnect_loop())
+
+    async def _reconnect_loop(self) -> None:
+        """Retry connect() with the configured backoff schedule until success.
+
+        After backoff exhaustion (the last delay has been tried), transitions
+        to DISCONNECTED — the user can manually restart at that point.
+        If the task is cancelled (explicit disconnect()), exits silently.
+        """
+        try:
+            for attempt, delay in enumerate(self._reconnect_delays, start=1):
+                _LOG.info("Reconnect attempt %d will fire in %.1fs", attempt, delay)
+                await asyncio.sleep(delay)
+                if self._connection_state == ConnectionState.CONNECTED:
+                    # Something else reconnected us (manual connect()), stop.
+                    return
+                try:
+                    # Tear down any stale IB ref before trying fresh
+                    self._ib = None
+                    self._streaming.clear()
+                    await self.connect()
+                    _LOG.info("Reconnect attempt %d succeeded", attempt)
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    _LOG.warning("Reconnect attempt %d failed: %s", attempt, exc)
+                    continue
+            _LOG.error("Backoff exhausted after %d attempts; staying DISCONNECTED", len(self._reconnect_delays))
+            self._connection_state = ConnectionState.DISCONNECTED
+        except asyncio.CancelledError:
+            _LOG.info("Reconnect loop cancelled")
+            raise
 
     # ---- streaming (slice 4) ------------------------------------------------
 

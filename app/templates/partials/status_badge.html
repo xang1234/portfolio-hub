@@ -1,9 +1,15 @@
-{% if connected %}
+{% if state == "connected" %}
 <span id="ibkr-status"
       class="status-badge status-badge--connected"
       hx-get="/healthz"
       hx-trigger="every 5s"
       hx-swap="outerHTML">🟢 IBKR connected</span>
+{% elif state == "reconnecting" %}
+<span id="ibkr-status"
+      class="status-badge status-badge--reconnecting"
+      hx-get="/healthz"
+      hx-trigger="every 5s"
+      hx-swap="outerHTML">🟡 IBKR reconnecting</span>
 {% else %}
 <span id="ibkr-status"
       class="status-badge status-badge--disconnected"

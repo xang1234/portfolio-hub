@@ -49,6 +49,9 @@ class FakeAdapter:
     async def connect(self) -> None: self._connected = True
     async def disconnect(self) -> None: self._connected = False
     async def is_connected(self) -> bool: return self._connected
+    async def get_connection_state(self):
+        from app.core.broker import ConnectionState
+        return ConnectionState.CONNECTED if self._connected else ConnectionState.DISCONNECTED
     async def get_positions(self): return list(self._positions)
     async def get_account_summary(self): return []
 

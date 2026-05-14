@@ -12,6 +12,8 @@ IB Gateway and the app doesn't auto-connect on import.
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.broker import ConnectionState
+
 
 class FakeAdapter:
     """Test double satisfying the Broker Protocol for slice 1 endpoint tests."""
@@ -28,6 +30,9 @@ class FakeAdapter:
 
     async def is_connected(self) -> bool:
         return self._connected
+
+    async def get_connection_state(self) -> ConnectionState:
+        return ConnectionState.CONNECTED if self._connected else ConnectionState.DISCONNECTED
 
     async def get_positions(self):  # pragma: no cover — slice 1 tests don't render rows
         return []
