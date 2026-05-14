@@ -55,9 +55,18 @@
     border-bottom: 1px solid var(--pico-muted-border-color);
 }
 
+/* Make numeric columns shrink to fit their content, leaving the rest for
+ * the name. Width: 1% is the standard CSS-table idiom to force "shrink to
+ * content"; nowrap keeps "42,050 HKD" intact on one line.
+ */
 .holdings-table .col-num {
     text-align: right;
     white-space: nowrap;
+    width: 1%;
+}
+
+.holdings-table .col-name {
+    width: auto;
 }
 
 .holdings-table tbody td {
@@ -68,23 +77,30 @@
 
 .position-row .col-name {
     line-height: 1.25;
+    /* Allow long names to wrap onto a second line within the column rather
+     * than pushing other columns wider. overflow-wrap handles single very
+     * long tokens (rare for company names but safe). */
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .position-row .flag {
     display: inline-block;
-    margin-right: 0.4rem;
-    font-size: 1.1rem;
+    margin-right: 0.35rem;
+    font-size: 1.05rem;
     vertical-align: -0.05em;
 }
 
 .position-row .name-en {
     font-weight: 500;
+    /* Slight size reduction; long names wrap rather than push other columns. */
+    font-size: 0.92rem;
 }
 
 .position-row .native-symbol {
     display: block;
     color: var(--pico-muted-color);
-    font-size: 0.78rem;
+    font-size: 0.75rem;
     margin-top: 0.1rem;
 }
 
@@ -106,11 +122,22 @@
     opacity: 0.75;
 }
 
-/* Narrow phones: tighten everything */
+/* Narrow phones: tighten everything to maximize space for numbers. */
 @media (max-width: 480px) {
     .holdings-table thead th,
     .holdings-table tbody td {
-        padding: 0.5rem 0.35rem;
-        font-size: 0.92rem;
+        padding: 0.5rem 0.3rem;
+        font-size: 0.9rem;
+    }
+    .position-row .name-en {
+        font-size: 0.88rem;
+    }
+    .position-row .flag {
+        margin-right: 0.25rem;
+    }
+    /* Reduce the visual weight of the currency suffix on tight screens. */
+    .position-row .currency {
+        font-size: 0.7rem;
+        margin-left: 0.15rem;
     }
 }
