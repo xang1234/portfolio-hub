@@ -1,0 +1,29 @@
+# Environment
+.env
+.env.local
+
+# Local data
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# IB Gateway local config (in case anyone bind-mounts instead of named volume)
+jts/
+Jts/
