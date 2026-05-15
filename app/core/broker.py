@@ -42,7 +42,7 @@ class Position:
     market_value_usd: float           # 0.0 when fx_unavailable=True
     unrealized_pnl_native: float
     unrealized_pnl_usd: float         # 0.0 when fx_unavailable=True
-    # Slice 3 FX metadata — defaults keep older test fixtures working
+    # FX-rate metadata — defaults preserve back-compat for test fixtures.
     fx_is_stale: bool = False         # IB rate older than 60s during market hours → ⚠️
     fx_is_fallback: bool = False      # rate came from public-API fallback → 📡
     fx_unavailable: bool = False      # no rate found at all → render —

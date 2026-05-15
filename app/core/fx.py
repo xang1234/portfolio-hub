@@ -1,13 +1,17 @@
 """FX subsystem: convert native currency amounts to USD.
 
-Slice 3 surface (this module grows across cycles 1-7):
-  - FxRate: an immutable quote with source + staleness metadata
-  - SUPPORTED_FX: the eleven currencies we subscribe to via IB
+Surface:
+  - FxRate: immutable quote with source + staleness metadata
+  - FxConversion: result of converting a native amount (+ pnl) to USD
+  - SUPPORTED_FX: the twelve currencies we subscribe to via IB
   - validate_currency: boundary validator that rejects CNY explicitly
+  - FxService: in-memory cache backed by fx_cache (SQLite), with IB Forex
+    subscriptions as primary source and open.er-api.com as fallback when
+    the IB feed is stale or missing.
 
-Subsequent cycles add FxService (in-memory cache + IB subscriptions),
-public-API fallback, staleness logic, and the auto-switch between IB
-and API sources.
+CNY is deliberately rejected at the boundary because IB returns CNH
+(offshore RMB) for Stock-Connect A-shares, and the two rates can diverge
+1-3% — silently substituting would mis-value HK-routed positions.
 """
 
 import asyncio
@@ -20,13 +24,18 @@ if TYPE_CHECKING:
     from app.db.store import Store
 
 
+def _pair_for(currency: str) -> str:
+    """Convention: 'HKDUSD' means 'how many USD per HKD'."""
+    return f"{currency}USD"
+
+
 def _default_forex_factory(currency: str) -> Any:
     """Build an ib_async Forex contract for `currency` against USD.
 
     Imported lazily so tests don't need ib_async on PYTHONPATH.
     """
     from ib_async import Forex
-    return Forex(f"{currency}USD")
+    return Forex(_pair_for(currency))
 
 
 _API_URL = "https://open.er-api.com/v6/latest/USD"
@@ -88,9 +97,20 @@ class FxRate:
     source: Literal["IB", "API_FALLBACK"]
 
 
-def _pair_for(currency: str) -> str:
-    """Convention: 'HKDUSD' means 'how many USD per HKD'."""
-    return f"{currency}USD"
+@dataclass(frozen=True)
+class FxConversion:
+    """Result of converting a native-currency amount to USD.
+
+    Bundles the converted values with the FX-rate metadata downstream
+    callers (template, totals strip) need to render correctly. USD-
+    denominated rows return (mv_usd=mv_native, all flags False).
+    """
+
+    mv_usd: float
+    pnl_usd: float
+    fx_is_stale: bool
+    fx_is_fallback: bool
+    fx_unavailable: bool
 
 
 # Staleness threshold: an IB rate is considered stale when this much time has
@@ -171,7 +191,8 @@ class FxService:
         # time when the IB feed goes stale without losing track of either.
         self._ib_rates: dict[str, FxRate] = {}
         self._api_rates: dict[str, FxRate] = {}
-        self._subscribed: set[str] = set()
+        # Active IB subscriptions, keyed by currency. Membership doubles as
+        # the "already subscribed" guard for ensure_subscribed().
         self._tickers: dict[str, Any] = {}
         self._lock = asyncio.Lock()
         self._api_task: asyncio.Task | None = None
@@ -230,7 +251,6 @@ class FxService:
         self._ib = ib
         # The new IB instance has no live tickers, so reset the bookkeeping
         # to force ensure_subscribed() to re-create everything.
-        self._subscribed.clear()
         self._tickers.clear()
 
     async def get_rate(self, currency: str) -> FxRate | None:
@@ -328,14 +348,13 @@ class FxService:
         for currency in currencies:
             if currency == "USD":
                 continue
-            if currency in self._subscribed:
+            if currency in self._tickers:
                 continue
             validate_currency(currency)
             contract = self._forex_factory(currency)
             ticker = self._ib.reqMktData(contract, "", False, False)
             ticker.updateEvent += self._make_ticker_handler(currency)
             self._tickers[currency] = ticker
-            self._subscribed.add(currency)
             _LOG.info("Subscribed to FX pair %sUSD via IB", currency)
 
     def _make_ticker_handler(self, currency: str):
@@ -349,14 +368,19 @@ class FxService:
             price = _extract_forex_price(ticker)
             if price is None:
                 return
+            # IB Forex tickers fire often during quiet periods with the same
+            # midpoint repeating. Skip both the in-memory write and the DB
+            # upsert when nothing actually changed.
+            existing = self._ib_rates.get(currency)
+            if existing is not None and existing.rate == price:
+                return
             rate = FxRate(
-                pair=f"{currency}USD",
+                pair=_pair_for(currency),
                 rate=price,
                 quoted_at=datetime.now(timezone.utc),
                 is_stale=False,
                 source="IB",
             )
-            # Synchronous in-memory update so the next get_rate() sees it
             self._ib_rates[currency] = rate
             if self._store is None:
                 return

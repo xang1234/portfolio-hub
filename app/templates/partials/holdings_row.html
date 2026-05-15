@@ -3,16 +3,38 @@
     <td class="col-name">
         <span class="flag" aria-label="{{ position.exchange }}">{{ flag_for_exchange(position.exchange) }}</span>
         <span class="name-en">{{ position.name_en }}</span>
-        <span class="native-symbol">{{ position.native_symbol }}{% if position.fx_is_fallback %} <span class="fx-fallback-badge" title="FX rate from public-API fallback">📡</span>{% endif %}</span>
+        <span class="native-symbol">
+            {{ position.native_symbol }}
+            {% if position.fx_is_fallback %}
+                <span class="fx-fallback-badge" title="FX rate from public-API fallback">📡</span>
+            {% endif %}
+        </span>
     </td>
     <td class="col-num">{{ "{:,.0f}".format(position.quantity) }}</td>
     <td class="col-num">
-        {% if position.last_price > 0 %}{{ "{:,.2f}".format(position.last_price) }}{% if position.price_magnifier and position.price_magnifier > 1 %}<small class="pence-suffix" title="Quoted in pence (1/100 of {{ position.currency }})">GBp</small>{% endif %}{% if position.last_price_is_previous_close %}<small class="prev-close-note" title="No live market data; showing previous close">prev close</small>{% endif %}{% else %}—{% endif %}
+        {% if position.last_price > 0 %}
+            {{ "{:,.2f}".format(position.last_price) }}
+            {% if position.price_magnifier > 1 %}
+                <small class="pence-suffix" title="Quoted in pence (1/100 of {{ position.currency }})">GBp</small>
+            {% endif %}
+            {% if position.last_price_is_previous_close %}
+                <small class="prev-close-note" title="No live market data; showing previous close">prev close</small>
+            {% endif %}
+        {% else %}—{% endif %}
     </td>
     <td class="col-num">
-        {% if position.market_value_native > 0 %}{{ "{:,.0f}".format(position.market_value_native) }}<small class="currency">{{ position.currency }}</small>{% else %}—{% endif %}
+        {% if position.market_value_native > 0 %}
+            {{ "{:,.0f}".format(position.market_value_native) }}<small class="currency">{{ position.currency }}</small>
+        {% else %}—{% endif %}
     </td>
     <td class="col-num">
-        {% if position.fx_unavailable or (position.market_value_usd == 0 and position.currency != 'USD') %}—{% else %}{{ "{:,.0f}".format(position.market_value_usd) }}{% if position.fx_is_stale %} <span class="fx-stale-badge" title="FX rate is stale">⚠️</span>{% endif %}{% endif %}
+        {% if position.fx_unavailable or (position.market_value_usd == 0 and position.currency != 'USD') %}
+            —
+        {% else %}
+            {{ "{:,.0f}".format(position.market_value_usd) }}
+            {% if position.fx_is_stale %}
+                <span class="fx-stale-badge" title="FX rate is stale">⚠️</span>
+            {% endif %}
+        {% endif %}
     </td>
 </tr>

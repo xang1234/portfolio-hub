@@ -1,16 +1,18 @@
 """IBKR concrete Broker adapter.
 
-Slice 2 surface:
-  - connect / disconnect / is_connected (from slice 1)
-  - get_positions(): STK rows only, with English name resolution and primary
-    exchange derivation via reqContractDetails. CASH support arrives in slice 6.
-  - get_account_summary(): minimal stub returning a list with one entry per
-    distinct account_id seen in positions. Slice 7 expands this with real NLV.
+Public surface (Broker Protocol):
+  - connect / disconnect / is_connected / get_connection_state
+  - get_positions(): STK rows only (CASH still pending), with English name
+    resolution via reqContractDetails, FX conversion to USD via FxService,
+    previous-close fallback (IB historical → Yahoo) for unsubscribed markets,
+    and pence-quoted UK equity normalization via priceMagnifier.
+  - get_account_summary(): minimal stub; expanded later when accountValues()
+    integration lands.
 
-Out of scope for this slice:
-  - FX conversion to USD (slice 3) — USD fields remain 0.0
-  - Live updates / market data subscriptions (slice 4)
-  - Reconnection on disconnect (slice 9)
+Internally, the adapter also runs:
+  - A streaming layer that subscribes to reqMktData per position and
+    pushes ticks into LivePositions for the SSE consumer.
+  - An auto-reconnect loop on disconnectedEvent with exponential backoff.
 """
 
 import asyncio
@@ -19,7 +21,7 @@ from dataclasses import replace
 from typing import Callable, Protocol, Sequence
 
 from app.core.broker import AccountSummary, ConnectionState, Position
-from app.core.fx import FxService
+from app.core.fx import FxConversion, FxService
 from app.core.live_positions import LivePositions
 from app.core.names import NameResolver
 from app.core.symbols import canonical_symbol
@@ -293,16 +295,12 @@ class IbkrAdapter:
         )
         quantity = float(ib_pos.position)
         avg_cost = float(ib_pos.avgCost)
-        # For pence-quoted UK equities (priceMagnifier=100), last and avgCost
-        # arrive in pence. Normalize to major currency for mv/pnl native so
-        # downstream FX math and the MV column are in pounds. Display of the
-        # Last column still shows the raw pence value with a "p" suffix.
+        # mv/pnl in major currency — see Position.price_magnifier for the
+        # divisor convention.
         mv_native = quantity * last_price / price_magnifier
         pnl_native = (last_price - avg_cost) * quantity / price_magnifier
 
-        mv_usd, pnl_usd, fx_is_stale, fx_is_fallback, fx_unavailable = (
-            await self._convert_to_usd(contract.currency, mv_native, pnl_native)
-        )
+        conv = self._convert_to_usd(contract.currency, mv_native, pnl_native)
 
         return Position(
             broker=self.name,
@@ -318,42 +316,42 @@ class IbkrAdapter:
             avg_cost=avg_cost,
             last_price=last_price,
             market_value_native=mv_native,
-            market_value_usd=mv_usd,
+            market_value_usd=conv.mv_usd,
             unrealized_pnl_native=pnl_native,
-            unrealized_pnl_usd=pnl_usd,
-            fx_is_stale=fx_is_stale,
-            fx_is_fallback=fx_is_fallback,
-            fx_unavailable=fx_unavailable,
+            unrealized_pnl_usd=conv.pnl_usd,
+            fx_is_stale=conv.fx_is_stale,
+            fx_is_fallback=conv.fx_is_fallback,
+            fx_unavailable=conv.fx_unavailable,
             last_price_is_previous_close=is_prev_close,
             price_magnifier=price_magnifier,
         )
 
-    async def _convert_to_usd(
+    def _convert_to_usd(
         self, currency: str, mv_native: float, pnl_native: float,
-    ) -> tuple[float, float, bool, bool, bool]:
-        """Return (mv_usd, pnl_usd, fx_is_stale, fx_is_fallback, fx_unavailable).
+    ) -> FxConversion:
+        """Convert native amounts to USD. Pure sync — FxService.get_rate
+        does no I/O so there's no need for an async variant.
 
-        USD-denominated rows pass through 1:1 with all flags False.
-        Rows with no FxService or no rate available come back with USD=0 and
-        fx_unavailable=True so the template knows to render — instead of $0.00.
+        USD rows pass through; missing-rate rows return mv/pnl=0 with
+        fx_unavailable=True so the template renders — instead of $0.00.
         """
         if currency == "USD":
-            return mv_native, pnl_native, False, False, False
+            return FxConversion(mv_native, pnl_native, False, False, False)
         if self._fx_service is None:
-            return 0.0, 0.0, False, False, True
+            return FxConversion(0.0, 0.0, False, False, True)
         try:
-            rate = await self._fx_service.get_rate(currency)
+            rate = self._fx_service.get_rate_sync(currency)
         except ValueError:
-            # CNY or other invalid currency hit at runtime — log and unavailable
             _LOG.warning("Invalid FX currency on position: %s", currency)
-            return 0.0, 0.0, False, False, True
+            return FxConversion(0.0, 0.0, False, False, True)
         if rate is None:
-            return 0.0, 0.0, False, False, True
-        mv_usd = mv_native * rate.rate
-        pnl_usd = pnl_native * rate.rate
-        return (
-            mv_usd, pnl_usd, rate.is_stale,
-            rate.source == "API_FALLBACK", False,
+            return FxConversion(0.0, 0.0, False, False, True)
+        return FxConversion(
+            mv_usd=mv_native * rate.rate,
+            pnl_usd=pnl_native * rate.rate,
+            fx_is_stale=rate.is_stale,
+            fx_is_fallback=rate.source == "API_FALLBACK",
+            fx_unavailable=False,
         )
 
     async def _resolve_name(
@@ -567,55 +565,29 @@ class IbkrAdapter:
             return
         if new_last == old_position.last_price:
             return
-        # A real positive tick supersedes the previous-close placeholder.
-        # For pence-quoted UK equities (price_magnifier=100) the tick is in
-        # pence; divide for major-currency mv/pnl.
-        pm = max(int(old_position.price_magnifier or 1), 1)
+        # Recompute USD on every real tick — fixes seed-time fx_unavailable
+        # rows where the FX rate hadn't loaded yet. See Position.price_magnifier
+        # for the pence-divisor convention.
+        pm = old_position.price_magnifier
         new_mv_native = old_position.quantity * new_last / pm
         new_pnl_native = (new_last - old_position.avg_cost) * old_position.quantity / pm
-        # Recompute USD using the *current* FX rate. The seed may have had
-        # fx_unavailable=True if the rate hadn't loaded yet; this tick is our
-        # chance to fix it. For USD-denominated positions, mv_usd == mv_native.
-        mv_usd, pnl_usd, fx_is_stale, fx_is_fallback, fx_unavailable = (
-            self._convert_to_usd_sync(
-                old_position.currency, new_mv_native, new_pnl_native,
-            )
+        conv = self._convert_to_usd(
+            old_position.currency, new_mv_native, new_pnl_native,
         )
         new_position = replace(
             old_position,
             last_price=new_last,
             market_value_native=new_mv_native,
             unrealized_pnl_native=new_pnl_native,
-            market_value_usd=mv_usd,
-            unrealized_pnl_usd=pnl_usd,
-            fx_is_stale=fx_is_stale,
-            fx_is_fallback=fx_is_fallback,
-            fx_unavailable=fx_unavailable,
+            market_value_usd=conv.mv_usd,
+            unrealized_pnl_usd=conv.pnl_usd,
+            fx_is_stale=conv.fx_is_stale,
+            fx_is_fallback=conv.fx_is_fallback,
+            fx_unavailable=conv.fx_unavailable,
             last_price_is_previous_close=False,
         )
         self._streaming[conid] = (new_position, contract, ticker)
         self._live_positions.set_position(new_position)
-
-    def _convert_to_usd_sync(
-        self, currency: str, mv_native: float, pnl_native: float,
-    ) -> tuple[float, float, bool, bool, bool]:
-        """Synchronous version of _convert_to_usd for use in tick callbacks.
-        Same contract: (mv_usd, pnl_usd, fx_is_stale, fx_is_fallback, fx_unavailable).
-        """
-        if currency == "USD":
-            return mv_native, pnl_native, False, False, False
-        if self._fx_service is None:
-            return 0.0, 0.0, False, False, True
-        try:
-            rate = self._fx_service.get_rate_sync(currency)
-        except ValueError:
-            return 0.0, 0.0, False, False, True
-        if rate is None:
-            return 0.0, 0.0, False, False, True
-        return (
-            mv_native * rate.rate, pnl_native * rate.rate,
-            rate.is_stale, rate.source == "API_FALLBACK", False,
-        )
 
     # ---- account summary (slice 2 minimum; slice 7 fleshes out) -------------
 

@@ -5,9 +5,9 @@ most stable instrument identifier (IB conId as string, etc.). The fetcher is
 injected so the IBKR adapter passes a closure over reqContractDetails; other
 adapters supply their own.
 
-Slice 3 follow-up: also caches IB's `priceMagnifier` (1 for most contracts,
-100 for pence-quoted UK equities like IQE) so downstream USD math doesn't
-need to re-fetch contract details on every page load.
+Cached fields also include IB's `priceMagnifier` (1 for most contracts, 100
+for pence-quoted UK equities like IQE) so downstream USD math doesn't have
+to re-fetch contract details on every page load.
 """
 
 from typing import Awaitable, Callable
