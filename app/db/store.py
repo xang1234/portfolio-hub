@@ -40,6 +40,14 @@ class Store:
         conn = await self._connection()
         schema_sql = _SCHEMA_PATH.read_text()
         await conn.executescript(schema_sql)
+        # Backfill price_magnifier column on existing DBs predating slice 3
+        # follow-up. SQLite ALTER TABLE has no IF NOT EXISTS; check first.
+        async with conn.execute("PRAGMA table_info(name_cache)") as cursor:
+            cols = {row[1] async for row in cursor}
+        if "price_magnifier" not in cols:
+            await conn.execute(
+                "ALTER TABLE name_cache ADD COLUMN price_magnifier INTEGER NOT NULL DEFAULT 1"
+            )
         await conn.commit()
 
     async def put_name_cache(
@@ -48,18 +56,20 @@ class Store:
         native_key: str,
         canonical_symbol: str,
         name_en: str,
+        price_magnifier: int = 1,
     ) -> None:
         conn = await self._connection()
         await conn.execute(
             """
-            INSERT INTO name_cache(broker, native_key, canonical_symbol, name_en, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO name_cache(broker, native_key, canonical_symbol, name_en, price_magnifier, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(broker, native_key) DO UPDATE SET
                 canonical_symbol = excluded.canonical_symbol,
                 name_en          = excluded.name_en,
+                price_magnifier  = excluded.price_magnifier,
                 updated_at       = excluded.updated_at
             """,
-            (broker, native_key, canonical_symbol, name_en, _utcnow().isoformat()),
+            (broker, native_key, canonical_symbol, name_en, int(price_magnifier), _utcnow().isoformat()),
         )
         await conn.commit()
 
@@ -67,12 +77,13 @@ class Store:
         self,
         broker: str,
         native_key: str,
-    ) -> tuple[str, str] | None:
+    ) -> tuple[str, str, int] | None:
+        """Return (canonical_symbol, name_en, price_magnifier) or None."""
         conn = await self._connection()
         cutoff = (_utcnow() - timedelta(days=NAME_CACHE_TTL_DAYS)).isoformat()
         async with conn.execute(
             """
-            SELECT canonical_symbol, name_en
+            SELECT canonical_symbol, name_en, price_magnifier
             FROM name_cache
             WHERE broker = ? AND native_key = ? AND updated_at >= ?
             """,
@@ -81,7 +92,7 @@ class Store:
             row = await cursor.fetchone()
         if row is None:
             return None
-        return (row[0], row[1])
+        return (row[0], row[1], int(row[2]) if row[2] is not None else 1)
 
     # ---- fx_cache (slice 3) -------------------------------------------------
 

@@ -285,7 +285,7 @@ class IbkrAdapter:
         resolved = await self._resolve_name(native_key, contract)
         if resolved is None:
             return None
-        canonical, name_en, primary_exchange = resolved
+        canonical, name_en, primary_exchange, price_magnifier = resolved
 
         last_price = last_prices.get(contract.conId, 0.0)
         is_prev_close = bool(
@@ -293,8 +293,12 @@ class IbkrAdapter:
         )
         quantity = float(ib_pos.position)
         avg_cost = float(ib_pos.avgCost)
-        mv_native = quantity * last_price
-        pnl_native = (last_price - avg_cost) * quantity
+        # For pence-quoted UK equities (priceMagnifier=100), last and avgCost
+        # arrive in pence. Normalize to major currency for mv/pnl native so
+        # downstream FX math and the MV column are in pounds. Display of the
+        # Last column still shows the raw pence value with a "p" suffix.
+        mv_native = quantity * last_price / price_magnifier
+        pnl_native = (last_price - avg_cost) * quantity / price_magnifier
 
         mv_usd, pnl_usd, fx_is_stale, fx_is_fallback, fx_unavailable = (
             await self._convert_to_usd(contract.currency, mv_native, pnl_native)
@@ -321,6 +325,7 @@ class IbkrAdapter:
             fx_is_fallback=fx_is_fallback,
             fx_unavailable=fx_unavailable,
             last_price_is_previous_close=is_prev_close,
+            price_magnifier=price_magnifier,
         )
 
     async def _convert_to_usd(
@@ -355,8 +360,8 @@ class IbkrAdapter:
         self,
         native_key: str,
         contract,
-    ) -> tuple[str, str, str] | None:
-        """Return (canonical_symbol, name_en, primary_exchange) or None to skip.
+    ) -> tuple[str, str, str, int] | None:
+        """Return (canonical_symbol, name_en, primary_exchange, price_magnifier) or None.
 
         Uses the NameResolver cache when a Store was injected; otherwise fetches
         on every call (acceptable for unit tests but not for production).
@@ -364,33 +369,38 @@ class IbkrAdapter:
         if self._name_resolver is not None:
             cached = await self._name_resolver.resolve(self.name, native_key)
             if cached is not None:
-                # cache stores (canonical_symbol, name_en) — but we still need
-                # the primary_exchange. Recover it from canonical_symbol's suffix.
-                canonical, name_en = cached
+                canonical, name_en, price_magnifier = cached
                 primary_exchange = _primary_exchange_from_canonical(canonical)
                 if primary_exchange is None:
                     return None
-                return canonical, name_en, primary_exchange
+                return canonical, name_en, primary_exchange, price_magnifier
 
         fetched = await self._fetch_contract_details(self.name, native_key, contract=contract)
         if fetched is None:
             return None
-        canonical, name_en = fetched
+        canonical, name_en, price_magnifier = fetched
         primary_exchange = _primary_exchange_from_canonical(canonical)
         if primary_exchange is None:
             return None
         if self._store is not None:
-            await self._store.put_name_cache(self.name, native_key, canonical, name_en)
-        return canonical, name_en, primary_exchange
+            await self._store.put_name_cache(
+                self.name, native_key, canonical, name_en, price_magnifier,
+            )
+        return canonical, name_en, primary_exchange, price_magnifier
 
     async def _fetch_contract_details(
         self,
         broker: str,
         native_key: str,
         contract=None,
-    ) -> tuple[str, str] | None:
+    ) -> tuple[str, str, int] | None:
         """Fetcher passed to NameResolver. Calls reqContractDetailsAsync and
-        returns (canonical_symbol, name_en) or None."""
+        returns (canonical_symbol, name_en, price_magnifier) or None.
+
+        priceMagnifier defaults to 1 for contracts where IB doesn't supply it
+        (most). LSE pence-quoted equities get 100 — IB returns last/avgCost
+        in pence for those.
+        """
         if self._ib is None:
             return None
         if contract is None:
@@ -424,7 +434,11 @@ class IbkrAdapter:
             return None
 
         name_en = (getattr(details, "longName", "") or "").strip()
-        return canonical, name_en
+        try:
+            price_magnifier = int(getattr(details, "priceMagnifier", 1) or 1)
+        except (TypeError, ValueError):
+            price_magnifier = 1
+        return canonical, name_en, price_magnifier
 
     # ---- reconnect (slice 9) ------------------------------------------------
 
@@ -554,8 +568,11 @@ class IbkrAdapter:
         if new_last == old_position.last_price:
             return
         # A real positive tick supersedes the previous-close placeholder.
-        new_mv_native = old_position.quantity * new_last
-        new_pnl_native = (new_last - old_position.avg_cost) * old_position.quantity
+        # For pence-quoted UK equities (price_magnifier=100) the tick is in
+        # pence; divide for major-currency mv/pnl.
+        pm = max(int(old_position.price_magnifier or 1), 1)
+        new_mv_native = old_position.quantity * new_last / pm
+        new_pnl_native = (new_last - old_position.avg_cost) * old_position.quantity / pm
         # Recompute USD using the *current* FX rate. The seed may have had
         # fx_unavailable=True if the rate hadn't loaded yet; this tick is our
         # chance to fix it. For USD-denominated positions, mv_usd == mv_native.
