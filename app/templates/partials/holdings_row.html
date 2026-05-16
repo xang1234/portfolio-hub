@@ -1,7 +1,9 @@
 <tr id="row-{{ position.broker }}-{{ position.account_id }}-{{ position.canonical_symbol }}"
     class="position-row">
     <td class="col-name">
+        {% if position.exchange %}
         <span class="flag" aria-label="{{ position.exchange }}">{{ flag_for_exchange(position.exchange) }}</span>
+        {% endif %}
         <span class="name-en">{{ position.name_en }}</span>
         <span class="native-symbol">
             {{ position.native_symbol }}

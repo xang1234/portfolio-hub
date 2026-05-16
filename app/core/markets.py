@@ -111,6 +111,47 @@ _US_EXTENDED_EXCHANGES: frozenset[str] = frozenset(
 )
 
 
+# Exchange-local timezone abbreviations for the "16:00 HKT" line on the
+# market-status card. Hardcoded (rather than %Z) because the OS-provided
+# abbreviation varies by platform and splits across DST variants (EST/EDT).
+# "ET" deliberately collapses EST and EDT — users want a stable label.
+_MIC_TO_TZ_LABEL: dict[str, str] = {
+    "XHKG": "HKT",
+    "XTKS": "JST",
+    "XKRX": "KST",
+    "XTAI": "TST",
+    "XSHG": "CST",
+    "XSES": "SGT",
+    "XASX": "AEST",
+    "XLON": "GMT",
+    "XETR": "CET",
+    "XPAR": "CET",
+    "XAMS": "CET",
+    "XMAD": "CET",
+    "XMIL": "CET",
+    "XSTO": "CET",
+    "XSWX": "CET",
+    "XNYS": "ET",
+    "XTSE": "ET",
+}
+
+
+def _format_local(utc_dt: datetime, cal, mic: str) -> str:
+    """Render a UTC moment in the exchange's local time as 'HH:MM TZ'.
+
+    Falls back to %Z if the MIC has no canonical label, which keeps newly
+    added venues from rendering an empty string.
+    """
+    label = _MIC_TO_TZ_LABEL.get(mic, "")
+    try:
+        local = utc_dt.astimezone(cal.tz)
+    except Exception:
+        return ""
+    if label:
+        return f"{local.strftime('%H:%M')} {label}"
+    return local.strftime("%H:%M %Z").strip()
+
+
 class MarketHours:
     """Compute current trading state per exchange.
 
@@ -144,6 +185,17 @@ class MarketHours:
             return None
         return prior.iloc[-1]["close"].to_pydatetime()
 
+    def _next_session_open(self, cal, today_date) -> datetime | None:
+        """UTC open of the next session strictly after `today_date` if today
+        is itself a session, or starting at `today_date` if today isn't."""
+        schedule = cal.schedule
+        future = schedule.loc[today_date:]
+        if not future.empty and future.index[0] == today_date:
+            future = future.iloc[1:]
+        if future.empty:
+            return None
+        return future.iloc[0]["open"].to_pydatetime()
+
     def status(self, ib_exchange: str) -> MarketStatus | None:
         """Return current MarketStatus for the given IB exchange code,
         or None if the venue isn't mapped (caller skips the row)."""
@@ -158,33 +210,36 @@ class MarketHours:
 
         ts = pd.Timestamp(now)
         date = ts.normalize().tz_convert(None) if ts.tz is not None else ts.normalize()
+
+        def make_status(state, transition_dt, label, extended_session=None):
+            if transition_dt is not None:
+                iso = transition_dt.isoformat()
+                local = _format_local(transition_dt, cal, mic)
+            else:
+                iso = ""
+                local = ""
+            return MarketStatus(
+                exchange=display,
+                state=state,
+                extended_session=extended_session,
+                next_transition_local=local,
+                next_transition_iso=iso,
+                next_transition_label=label,
+            )
+
         try:
             is_session_today = cal.is_session(date)
         except Exception:
             is_session_today = False
 
         if not is_session_today:
-            return MarketStatus(
-                exchange=display,
-                state=MarketState.HOLIDAY,
-                extended_session=None,
-                next_transition_local="",  # filled in cycle 6
-                next_transition_iso="",
-                next_transition_label="Opens",
-            )
+            return make_status(MarketState.HOLIDAY, self._next_session_open(cal, date), "Opens")
 
-        # Look up today's session row
         try:
             session = cal.schedule.loc[date]
         except KeyError:
-            return MarketStatus(
-                exchange=display,
-                state=MarketState.HOLIDAY,
-                extended_session=None,
-                next_transition_local="",
-                next_transition_iso="",
-                next_transition_label="Opens",
-            )
+            return make_status(MarketState.HOLIDAY, self._next_session_open(cal, date), "Opens")
+
         open_ts = session["open"].to_pydatetime()
         close_ts = session["close"].to_pydatetime()
         break_start = session.get("break_start")
@@ -195,42 +250,30 @@ class MarketHours:
             if ib_exchange in _US_EXTENDED_EXCHANGES:
                 pre_start = open_ts - timedelta(hours=5, minutes=30)
                 if pre_start <= now < open_ts:
-                    return MarketStatus(
-                        exchange=display, state=MarketState.EXTENDED,
+                    return make_status(
+                        MarketState.EXTENDED, open_ts, "Pre-market ends",
                         extended_session="PRE",
-                        next_transition_local="",
-                        next_transition_iso="",
-                        next_transition_label="Pre-market ends",
                     )
                 # Post-market crosses midnight UTC; check both today's and the
                 # previous session's close → close+4h windows.
                 post_end_today = close_ts + timedelta(hours=4)
                 if close_ts <= now < post_end_today:
-                    return MarketStatus(
-                        exchange=display, state=MarketState.EXTENDED,
+                    return make_status(
+                        MarketState.EXTENDED, post_end_today, "After-hours ends",
                         extended_session="POST",
-                        next_transition_local="",
-                        next_transition_iso="",
-                        next_transition_label="After-hours ends",
                     )
                 if now < open_ts:
                     prev_close = self._previous_session_close(cal, date)
                     if prev_close is not None and prev_close <= now < prev_close + timedelta(hours=4):
-                        return MarketStatus(
-                            exchange=display, state=MarketState.EXTENDED,
-                            extended_session="POST",
-                            next_transition_local="",
-                            next_transition_iso="",
-                            next_transition_label="After-hours ends",
+                        return make_status(
+                            MarketState.EXTENDED, prev_close + timedelta(hours=4),
+                            "After-hours ends", extended_session="POST",
                         )
-            return MarketStatus(
-                exchange=display,
-                state=MarketState.CLOSED,
-                extended_session=None,
-                next_transition_local="",
-                next_transition_iso="",
-                next_transition_label="Opens",
-            )
+            # CLOSED: before open → today's open; after close → next session's open.
+            if now < open_ts:
+                return make_status(MarketState.CLOSED, open_ts, "Opens")
+            return make_status(MarketState.CLOSED, self._next_session_open(cal, date), "Opens")
+
         # HKEX / TSE / SSE midday break. break_start / break_end are NaT
         # on exchanges without lunch, and pd.notna handles both NaT and None.
         if (
@@ -238,22 +281,15 @@ class MarketHours:
             and break_end is not None and pd.notna(break_end)
             and break_start.to_pydatetime() <= now < break_end.to_pydatetime()
         ):
-            return MarketStatus(
-                exchange=display,
-                state=MarketState.LUNCH,
-                extended_session=None,
-                next_transition_local="",
-                next_transition_iso="",
-                next_transition_label="Reopens",
-            )
-        return MarketStatus(
-            exchange=display,
-            state=MarketState.OPEN,
-            extended_session=None,
-            next_transition_local="",
-            next_transition_iso="",
-            next_transition_label="Closes",
-        )
+            return make_status(MarketState.LUNCH, break_end.to_pydatetime(), "Reopens")
+
+        # OPEN — if a lunch break lies ahead today, point at it; otherwise close.
+        if (
+            break_start is not None and pd.notna(break_start)
+            and now < break_start.to_pydatetime()
+        ):
+            return make_status(MarketState.OPEN, break_start.to_pydatetime(), "Lunch")
+        return make_status(MarketState.OPEN, close_ts, "Closes")
 
 
 class MarketState(str, Enum):

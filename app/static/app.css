@@ -155,6 +155,76 @@ button.status-badge--retry:hover {
     margin-top: 0.1rem;
 }
 
+/* Market-hours drawer + cards ----------------------------------------- */
+
+.market-drawer {
+    margin: 0.5rem 0 0.75rem;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 0.5rem;
+    background: var(--pico-card-background-color, transparent);
+}
+
+.market-drawer__summary {
+    list-style: none;
+    padding: 0.55rem 0.75rem;
+    cursor: pointer;
+    user-select: none;
+    font-size: 0.95rem;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+}
+.market-drawer__summary::-webkit-details-marker { display: none; }
+
+.market-drawer__glyphs {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.4rem;
+    align-items: center;
+}
+
+.market-drawer__glyph {
+    font-variant-emoji: emoji;
+}
+
+.market-drawer__cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem 0.75rem;
+    border-top: 1px solid var(--pico-muted-border-color);
+}
+
+.market-card {
+    margin: 0;
+    padding: 0.55rem 0.65rem;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 0.4rem;
+    background: var(--pico-background-color);
+}
+
+.market-card__head {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-weight: 600;
+}
+
+.market-card__exchange {
+    font-size: 0.95rem;
+}
+
+.market-card__transition {
+    margin: 0.3rem 0 0;
+    font-size: 0.85rem;
+    color: var(--pico-muted-color);
+}
+
+.market-card__countdown {
+    margin-left: 0.25rem;
+    font-variant-numeric: tabular-nums;
+}
+
 .empty-state {
     text-align: center;
     padding: 2rem 1rem;

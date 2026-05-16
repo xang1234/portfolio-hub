@@ -16,6 +16,22 @@
 {% endblock %}
 
 {% block content %}
+{% if markets %}
+<details class="market-drawer" {% if drawer_open %}open{% endif %}>
+    <summary class="market-drawer__summary">
+        <span class="market-drawer__glyphs">
+            {% for m in markets %}<span class="market-drawer__glyph">{{ market_flag[m.exchange] }} {{ market_state_emoji[m.state.value] }}</span>{% if not loop.last %} · {% endif %}{% endfor %}
+        </span>
+    </summary>
+    <div class="market-drawer__cards">
+        {% for m in markets %}
+        {% with market=m, flag=market_flag[m.exchange] %}
+            {% include "partials/market_card.html" %}
+        {% endwith %}
+        {% endfor %}
+    </div>
+</details>
+{% endif %}
 {% if positions %}
 <table class="holdings-table">
     <thead>
