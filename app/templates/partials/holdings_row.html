@@ -13,6 +13,9 @@
             {% if position.fx_is_fallback %}
                 <span class="fx-fallback-badge" title="FX rate from public-API fallback">📡</span>
             {% endif %}
+            {% if (active_account or 'All') == 'All' and position.account_id %}
+                <span class="account-pill" title="IBKR account">{{ position.account_id }}</span>
+            {% endif %}
         </span>
         {% set row_market = (market_by_ib or {}).get(position.exchange) %}
         {% if position.asset_class == 'STK' and row_market and row_market.state.value == 'LUNCH' %}

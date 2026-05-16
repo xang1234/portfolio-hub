@@ -269,7 +269,7 @@ def create_app(
         return EventSourceResponse(generator)
 
     @app.get("/", response_class=HTMLResponse)
-    async def index(request: Request):
+    async def index(request: Request, account: str | None = None):
         broker = request.app.state.broker
         live = request.app.state.live_positions
         conn_state = await broker.get_connection_state()
@@ -283,23 +283,48 @@ def create_app(
                 positions = await broker.get_positions()
             except NotImplementedError:
                 positions = []
-        positions.sort(key=lambda p: p.market_value_native, reverse=True)
-        totals = _compute_totals(positions)
+
+        # Fetch account summaries up-front so the filter chips and any
+        # per-account summary line have the data they need.
+        try:
+            account_summaries = await broker.get_account_summary()
+        except NotImplementedError:
+            account_summaries = []
+        known_accounts = {s.account_id for s in account_summaries} | {
+            p.account_id for p in positions
+        }
+
+        # Resolve the active account filter. None / "All" / unknown → All.
+        active_account = account
+        if active_account in (None, "", "All") or active_account not in known_accounts:
+            active_account = "All"
+            shown_positions = positions
+        else:
+            shown_positions = [p for p in positions if p.account_id == active_account]
+
+        shown_positions = sorted(
+            shown_positions, key=lambda p: p.market_value_native, reverse=True,
+        )
+        totals = _compute_totals(shown_positions)
+        # Market panel uses all visible exchanges; under a filter that's
+        # the filtered set, otherwise everything.
         markets, market_flag, market_by_ib = _markets_from_positions(
-            positions, market_hours,
+            shown_positions, market_hours,
         )
         return templates.TemplateResponse(
             request=request,
             name="index.html",
             context={
                 "state": state,
-                "positions": positions,
+                "positions": shown_positions,
                 "totals": totals,
                 "markets": markets,
                 "market_flag": market_flag,
                 "market_state_emoji": STATE_EMOJI,
                 "market_by_ib": market_by_ib,
                 "drawer_open": False,
+                "account_summaries": account_summaries,
+                "active_account": active_account,
             },
         )
 

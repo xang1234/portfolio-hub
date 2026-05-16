@@ -330,25 +330,6 @@ async def test_connect_requests_delayed_frozen_market_data_type(store):
     )
 
 
-async def test_get_account_summary_returns_one_summary_per_account(store):
-    """Multi-account support per Q2 of grilling — slice 7 will use this,
-    but a list shape is part of the Protocol contract from slice 2 forward."""
-    contract = FakeContract(conId=1, symbol="AAPL", secType="STK", currency="USD")
-    fake_ib = FakeIB(
-        positions=[FakeIBPosition(account="U1", contract=contract, position=10.0, avgCost=150.0)],
-        contract_details={
-            1: FakeContractDetails(
-                contract=FakeContract(conId=1, symbol="AAPL", secType="STK", currency="USD", primaryExchange="NASDAQ"),
-                longName="APPLE INC",
-            ),
-        },
-        last_prices={1: 180.0},
-    )
-    adapter = make_adapter(fake_ib, store)
-    await adapter.connect()
-
-    summaries = await adapter.get_account_summary()
-
-    assert isinstance(summaries, list)
-    # At minimum, the accounts seen in positions should be present
-    assert any(s.account_id == "U1" for s in summaries)
+# get_account_summary's contract moved to tests/test_ibkr_account_summary.py
+# in slice 7 — it now reads from IB's accountSummaryAsync directly rather
+# than deriving from position rows.

@@ -634,25 +634,89 @@ class IbkrAdapter:
         self._streaming[conid] = (new_position, contract, ticker)
         self._live_positions.set_position(new_position)
 
-    # ---- account summary (slice 2 minimum; slice 7 fleshes out) -------------
+    # ---- account summary (slice 7) ------------------------------------------
 
     async def get_account_summary(self) -> list[AccountSummary]:
-        positions = await self.get_positions() if self._ib is not None else []
-        account_ids = {p.account_id for p in positions} or {"UNKNOWN"}
-        return [
-            AccountSummary(
-                broker=self.name,
-                account_id=acc,
-                base_currency="USD",       # slice 7 will pull this from accountValues()
-                net_liquidation_usd=0.0,
-                cash_usd=0.0,
-                buying_power_usd=0.0,
+        """Return one AccountSummary per linked IBKR account.
+
+        Pulls the tags we care about (NetLiquidation, TotalCashValue,
+        BuyingPower) for every account from IB's `accountSummaryAsync`,
+        then converts each value to USD through the FxService when the
+        reported currency isn't already USD.
+
+        Account IDs come from `managedAccounts()` so accounts with zero
+        positions still appear as filter-chip options. Returns `[]` when
+        the gateway isn't connected — matches `get_positions`.
+        """
+        if self._ib is None:
+            return []
+        managed = getattr(self._ib, "managedAccounts", None)
+        accounts: list[str] = list(managed()) if callable(managed) else []
+        try:
+            rows = await self._ib.accountSummaryAsync()
+        except Exception as exc:
+            _LOG.warning("accountSummaryAsync failed: %s", exc)
+            rows = []
+
+        # Group {(account, tag) -> (value:str, currency:str)} for easy access.
+        by_acc_tag: dict[tuple[str, str], tuple[str, str]] = {}
+        for r in rows:
+            by_acc_tag[(r.account, r.tag)] = (r.value, r.currency or "USD")
+            if r.account and r.account not in accounts:
+                accounts.append(r.account)
+
+        out: list[AccountSummary] = []
+        for acc in sorted(set(accounts)):
+            nlv_value, nlv_ccy = by_acc_tag.get((acc, "NetLiquidation"), ("0", "USD"))
+            cash_value, cash_ccy = by_acc_tag.get((acc, "TotalCashValue"), ("0", "USD"))
+            bp_value, bp_ccy = by_acc_tag.get((acc, "BuyingPower"), ("0", "USD"))
+            base_ccy = nlv_ccy  # NLV's reported currency is the account's base
+            nlv_usd = self._to_usd(_safe_float(nlv_value), nlv_ccy)
+            cash_usd = self._to_usd(_safe_float(cash_value), cash_ccy)
+            bp_usd = self._to_usd(_safe_float(bp_value), bp_ccy)
+            out.append(
+                AccountSummary(
+                    broker=self.name,
+                    account_id=acc,
+                    base_currency=base_ccy,
+                    net_liquidation_usd=nlv_usd,
+                    cash_usd=cash_usd,
+                    buying_power_usd=bp_usd,
+                )
             )
-            for acc in sorted(account_ids)
-        ]
+        return out
+
+    def _to_usd(self, amount: float, currency: str) -> float:
+        """Convert ``amount`` from ``currency`` to USD using the cached
+        FX rate. USD passes through; unknown currency or missing rate
+        returns 0.0 so the UI shows zero rather than crashing."""
+        if currency == "USD":
+            return amount
+        if self._fx_service is None:
+            return 0.0
+        try:
+            rate = self._fx_service.get_rate_sync(currency)
+        except ValueError:
+            _LOG.warning("Invalid base currency on account: %s", currency)
+            return 0.0
+        if rate is None:
+            return 0.0
+        return amount * rate.rate
 
 
 # Helpers ---------------------------------------------------------------------
+
+
+def _safe_float(value: str) -> float:
+    """IB account-summary values are strings — convert defensively.
+
+    Empty / unparseable values become 0.0 rather than raising; an account
+    with a missing tag should render zero, not crash the page.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _coerce_last(ticker) -> float:

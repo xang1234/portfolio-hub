@@ -165,6 +165,63 @@ button.status-badge--retry:hover {
     margin-top: 0.1rem;
 }
 
+/* Account chips strip --------------------------------------------------- */
+
+.account-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    padding: 0.4rem 1rem 0;
+    margin: 0;
+}
+
+.account-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+    padding: 0.2rem 0.65rem;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 999px;
+    background: var(--pico-background-color);
+    color: var(--pico-color);
+    font-size: 0.85rem;
+    text-decoration: none;
+    cursor: pointer;
+}
+.account-chip:hover {
+    background: var(--pico-muted-color);
+    color: var(--pico-background-color);
+}
+.account-chip--active {
+    background: var(--pico-primary-background);
+    color: var(--pico-primary-inverse);
+    border-color: var(--pico-primary-background);
+    font-weight: 600;
+}
+
+.account-summary {
+    margin: 0.3rem 1rem 0.5rem;
+    font-size: 0.85rem;
+    color: var(--pico-muted-color);
+}
+
+/* Per-row account pill — hidden on narrow phones, shown landscape/desktop. */
+.account-pill {
+    display: inline-block;
+    margin-left: 0.35rem;
+    padding: 0 0.4rem;
+    border-radius: 999px;
+    background: var(--pico-muted-color);
+    color: var(--pico-background-color);
+    font-size: 0.65rem;
+    font-weight: 500;
+    line-height: 1.4;
+    vertical-align: middle;
+}
+@media (max-width: 480px) and (orientation: portrait) {
+    .account-pill { display: none; }
+}
+
 /* Market-hours drawer + cards ----------------------------------------- */
 
 .market-drawer {
