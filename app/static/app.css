@@ -12,6 +12,29 @@
     align-items: center;
     gap: 0.75rem;
     min-height: 44px;
+    flex-wrap: wrap;
+}
+
+.totals {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    font-variant-numeric: tabular-nums;
+    margin-left: auto;
+}
+.total-mv-usd {
+    font-weight: 600;
+    font-size: 1.05rem;
+}
+.total-pnl-usd, .total-pnl-pct {
+    font-weight: 500;
+    font-size: 0.95rem;
+}
+.pnl-positive {
+    color: var(--pico-color-green-700, #1f7a32);
+}
+.pnl-negative {
+    color: var(--pico-color-red-700, #a40e26);
 }
 
 .status-badge {
@@ -122,6 +145,14 @@ button.status-badge--retry:hover {
     color: var(--pico-muted-color);
     font-size: 0.75rem;
     margin-left: 0.25rem;
+}
+
+.position-row .prev-close-note {
+    display: block;
+    color: var(--pico-muted-color);
+    font-size: 0.7rem;
+    font-style: italic;
+    margin-top: 0.1rem;
 }
 
 .empty-state {

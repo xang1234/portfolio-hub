@@ -1,16 +1,18 @@
 """IBKR concrete Broker adapter.
 
-Slice 2 surface:
-  - connect / disconnect / is_connected (from slice 1)
-  - get_positions(): STK rows only, with English name resolution and primary
-    exchange derivation via reqContractDetails. CASH support arrives in slice 6.
-  - get_account_summary(): minimal stub returning a list with one entry per
-    distinct account_id seen in positions. Slice 7 expands this with real NLV.
+Public surface (Broker Protocol):
+  - connect / disconnect / is_connected / get_connection_state
+  - get_positions(): STK rows only (CASH still pending), with English name
+    resolution via reqContractDetails, FX conversion to USD via FxService,
+    previous-close fallback (IB historical → Yahoo) for unsubscribed markets,
+    and pence-quoted UK equity normalization via priceMagnifier.
+  - get_account_summary(): minimal stub; expanded later when accountValues()
+    integration lands.
 
-Out of scope for this slice:
-  - FX conversion to USD (slice 3) — USD fields remain 0.0
-  - Live updates / market data subscriptions (slice 4)
-  - Reconnection on disconnect (slice 9)
+Internally, the adapter also runs:
+  - A streaming layer that subscribes to reqMktData per position and
+    pushes ticks into LivePositions for the SSE consumer.
+  - An auto-reconnect loop on disconnectedEvent with exponential backoff.
 """
 
 import asyncio
@@ -19,9 +21,11 @@ from dataclasses import replace
 from typing import Callable, Protocol, Sequence
 
 from app.core.broker import AccountSummary, ConnectionState, Position
+from app.core.fx import FxConversion, FxService
 from app.core.live_positions import LivePositions
 from app.core.names import NameResolver
 from app.core.symbols import canonical_symbol
+from app.core.yahoo_quotes import default_yahoo_fetcher, yahoo_symbol_for
 from app.db.store import Store
 
 
@@ -65,6 +69,8 @@ class IbkrAdapter:
         ib_factory: Callable[[], _IBLike] = _default_ib_factory,
         store: Store | None = None,
         live_positions: LivePositions | None = None,
+        fx_service: FxService | None = None,
+        yahoo_quote_fetcher: Callable[[str], object] = default_yahoo_fetcher,
         reconnect_delays: Sequence[float] | None = None,
     ) -> None:
         self._host = host
@@ -73,6 +79,8 @@ class IbkrAdapter:
         self._ib_factory = ib_factory
         self._store = store
         self._live_positions = live_positions
+        self._fx_service = fx_service
+        self._yahoo_quote_fetcher = yahoo_quote_fetcher
         self._reconnect_delays: Sequence[float] = tuple(
             reconnect_delays if reconnect_delays is not None else _DEFAULT_RECONNECT_DELAYS
         )
@@ -125,6 +133,8 @@ class IbkrAdapter:
             self._name_resolver = NameResolver(
                 store=self._store, fetcher=self._fetch_contract_details
             )
+        if self._fx_service is not None:
+            self._fx_service.attach_ib(ib)
         # Register the disconnect handler so we can auto-reconnect when IBKR's
         # daily restart drops the session (or any other transient failure).
         disconnected_event = getattr(ib, "disconnectedEvent", None)
@@ -174,17 +184,102 @@ class IbkrAdapter:
         tickers = await self._ib.reqTickersAsync(*contracts)
         last_prices = {c.conId: _coerce_last(t) for c, t in zip(contracts, tickers)}
 
+        # For positions without a live/delayed last (international markets
+        # without paid market-data subs — TSEJ, SBF, IBIS, etc.), fall back
+        # to the most recent daily-bar close via reqHistoricalData. Mark
+        # these so the row renderer can show a "prev close" subtext.
+        previous_close_set: set[int] = set()
+        for contract in contracts:
+            if last_prices.get(contract.conId, 0.0) > 0:
+                continue
+            prev_close = await self._fetch_previous_close(contract)
+            if prev_close is not None and prev_close > 0:
+                last_prices[contract.conId] = prev_close
+                previous_close_set.add(contract.conId)
+
+        # Make sure FxService has live subscriptions for every non-USD currency
+        # we're about to render. Idempotent — repeated calls are cheap.
+        if self._fx_service is not None:
+            currencies = {p.contract.currency for p in stk_positions} - {"USD"}
+            try:
+                await self._fx_service.ensure_subscribed(currencies)
+            except Exception as exc:
+                _LOG.warning("Failed to ensure FX subscriptions: %s", exc)
+
         out: list[Position] = []
         for ib_pos in stk_positions:
-            position = await self._build_position(ib_pos, last_prices)
+            position = await self._build_position(
+                ib_pos, last_prices, previous_close_set,
+            )
             if position is not None:
                 out.append(position)
         return out
+
+    async def _fetch_previous_close(self, contract) -> float | None:
+        """Fall back to last-known close for instruments without a live tick.
+
+        Tries IB historical data first (subscription-independent on some
+        exchanges), then Yahoo Finance for venues IB gates entirely
+        (TSEJ, SBF, IBIS, SFB, etc.). Returns None on total failure so the
+        row degrades to — instead of crashing.
+        """
+        # First try: IB historical. Subscription-independent on US/HK/some others.
+        ib_close = await self._try_ib_historical(contract)
+        if ib_close is not None:
+            return ib_close
+        # Second try: Yahoo Finance EOD. Covers most international venues
+        # where IB gates data behind paid subscriptions.
+        return await self._try_yahoo(contract)
+
+    async def _try_ib_historical(self, contract) -> float | None:
+        req_hist = getattr(self._ib, "reqHistoricalDataAsync", None)
+        if not callable(req_hist):
+            return None
+        try:
+            bars = await req_hist(
+                contract,
+                endDateTime="",
+                durationStr="2 D",
+                barSizeSetting="1 day",
+                whatToShow="TRADES",
+                useRTH=True,
+                formatDate=1,
+            )
+        except Exception as exc:
+            _LOG.debug(
+                "IB historical fallback failed for %s (%s): %s",
+                getattr(contract, "symbol", "?"),
+                getattr(contract, "primaryExchange", "?"),
+                exc,
+            )
+            return None
+        if not bars:
+            return None
+        value = float(getattr(bars[-1], "close", 0.0))
+        return value if value > 0 else None
+
+    async def _try_yahoo(self, contract) -> float | None:
+        if self._yahoo_quote_fetcher is None:
+            return None
+        exchange = getattr(contract, "primaryExchange", "") or getattr(contract, "exchange", "")
+        symbol = yahoo_symbol_for(getattr(contract, "symbol", ""), exchange)
+        if symbol is None:
+            return None
+        try:
+            value = await self._yahoo_quote_fetcher(symbol)
+        except Exception as exc:
+            _LOG.debug("Yahoo fallback raised for %s: %s", symbol, exc)
+            return None
+        if value is None or value <= 0:
+            return None
+        _LOG.info("Used Yahoo EOD fallback for %s = %.4f", symbol, value)
+        return float(value)
 
     async def _build_position(
         self,
         ib_pos,
         last_prices: dict[int, float],
+        previous_close_set: set[int] | None = None,
     ) -> Position | None:
         contract = ib_pos.contract
         native_key = str(contract.conId)
@@ -192,13 +287,20 @@ class IbkrAdapter:
         resolved = await self._resolve_name(native_key, contract)
         if resolved is None:
             return None
-        canonical, name_en, primary_exchange = resolved
+        canonical, name_en, primary_exchange, price_magnifier = resolved
 
         last_price = last_prices.get(contract.conId, 0.0)
+        is_prev_close = bool(
+            previous_close_set is not None and contract.conId in previous_close_set
+        )
         quantity = float(ib_pos.position)
         avg_cost = float(ib_pos.avgCost)
-        mv_native = quantity * last_price
-        pnl_native = (last_price - avg_cost) * quantity
+        # mv/pnl in major currency — see Position.price_magnifier for the
+        # divisor convention.
+        mv_native = quantity * last_price / price_magnifier
+        pnl_native = (last_price - avg_cost) * quantity / price_magnifier
+
+        conv = self._convert_to_usd(contract.currency, mv_native, pnl_native)
 
         return Position(
             broker=self.name,
@@ -214,17 +316,50 @@ class IbkrAdapter:
             avg_cost=avg_cost,
             last_price=last_price,
             market_value_native=mv_native,
-            market_value_usd=0.0,        # filled in slice 3
+            market_value_usd=conv.mv_usd,
             unrealized_pnl_native=pnl_native,
-            unrealized_pnl_usd=0.0,      # filled in slice 3
+            unrealized_pnl_usd=conv.pnl_usd,
+            fx_is_stale=conv.fx_is_stale,
+            fx_is_fallback=conv.fx_is_fallback,
+            fx_unavailable=conv.fx_unavailable,
+            last_price_is_previous_close=is_prev_close,
+            price_magnifier=price_magnifier,
+        )
+
+    def _convert_to_usd(
+        self, currency: str, mv_native: float, pnl_native: float,
+    ) -> FxConversion:
+        """Convert native amounts to USD. Pure sync — FxService.get_rate
+        does no I/O so there's no need for an async variant.
+
+        USD rows pass through; missing-rate rows return mv/pnl=0 with
+        fx_unavailable=True so the template renders — instead of $0.00.
+        """
+        if currency == "USD":
+            return FxConversion(mv_native, pnl_native, False, False, False)
+        if self._fx_service is None:
+            return FxConversion(0.0, 0.0, False, False, True)
+        try:
+            rate = self._fx_service.get_rate_sync(currency)
+        except ValueError:
+            _LOG.warning("Invalid FX currency on position: %s", currency)
+            return FxConversion(0.0, 0.0, False, False, True)
+        if rate is None:
+            return FxConversion(0.0, 0.0, False, False, True)
+        return FxConversion(
+            mv_usd=mv_native * rate.rate,
+            pnl_usd=pnl_native * rate.rate,
+            fx_is_stale=rate.is_stale,
+            fx_is_fallback=rate.source == "API_FALLBACK",
+            fx_unavailable=False,
         )
 
     async def _resolve_name(
         self,
         native_key: str,
         contract,
-    ) -> tuple[str, str, str] | None:
-        """Return (canonical_symbol, name_en, primary_exchange) or None to skip.
+    ) -> tuple[str, str, str, int] | None:
+        """Return (canonical_symbol, name_en, primary_exchange, price_magnifier) or None.
 
         Uses the NameResolver cache when a Store was injected; otherwise fetches
         on every call (acceptable for unit tests but not for production).
@@ -232,33 +367,38 @@ class IbkrAdapter:
         if self._name_resolver is not None:
             cached = await self._name_resolver.resolve(self.name, native_key)
             if cached is not None:
-                # cache stores (canonical_symbol, name_en) — but we still need
-                # the primary_exchange. Recover it from canonical_symbol's suffix.
-                canonical, name_en = cached
+                canonical, name_en, price_magnifier = cached
                 primary_exchange = _primary_exchange_from_canonical(canonical)
                 if primary_exchange is None:
                     return None
-                return canonical, name_en, primary_exchange
+                return canonical, name_en, primary_exchange, price_magnifier
 
         fetched = await self._fetch_contract_details(self.name, native_key, contract=contract)
         if fetched is None:
             return None
-        canonical, name_en = fetched
+        canonical, name_en, price_magnifier = fetched
         primary_exchange = _primary_exchange_from_canonical(canonical)
         if primary_exchange is None:
             return None
         if self._store is not None:
-            await self._store.put_name_cache(self.name, native_key, canonical, name_en)
-        return canonical, name_en, primary_exchange
+            await self._store.put_name_cache(
+                self.name, native_key, canonical, name_en, price_magnifier,
+            )
+        return canonical, name_en, primary_exchange, price_magnifier
 
     async def _fetch_contract_details(
         self,
         broker: str,
         native_key: str,
         contract=None,
-    ) -> tuple[str, str] | None:
+    ) -> tuple[str, str, int] | None:
         """Fetcher passed to NameResolver. Calls reqContractDetailsAsync and
-        returns (canonical_symbol, name_en) or None."""
+        returns (canonical_symbol, name_en, price_magnifier) or None.
+
+        priceMagnifier defaults to 1 for contracts where IB doesn't supply it
+        (most). LSE pence-quoted equities get 100 — IB returns last/avgCost
+        in pence for those.
+        """
         if self._ib is None:
             return None
         if contract is None:
@@ -292,7 +432,11 @@ class IbkrAdapter:
             return None
 
         name_en = (getattr(details, "longName", "") or "").strip()
-        return canonical, name_en
+        try:
+            price_magnifier = int(getattr(details, "priceMagnifier", 1) or 1)
+        except (TypeError, ValueError):
+            price_magnifier = 1
+        return canonical, name_en, price_magnifier
 
     # ---- reconnect (slice 9) ------------------------------------------------
 
@@ -414,13 +558,33 @@ class IbkrAdapter:
             return
         old_position, contract, _ticker_ref = entry
         new_last = _coerce_last(ticker)
+        # Null tick (no data permission, off-hours snapshot, etc.) means "I
+        # don't know the price right now," not "the price is zero." Don't
+        # clobber the seeded Yahoo prev-close or any real previous tick.
+        if new_last <= 0:
+            return
         if new_last == old_position.last_price:
             return
+        # Recompute USD on every real tick — fixes seed-time fx_unavailable
+        # rows where the FX rate hadn't loaded yet. See Position.price_magnifier
+        # for the pence-divisor convention.
+        pm = old_position.price_magnifier
+        new_mv_native = old_position.quantity * new_last / pm
+        new_pnl_native = (new_last - old_position.avg_cost) * old_position.quantity / pm
+        conv = self._convert_to_usd(
+            old_position.currency, new_mv_native, new_pnl_native,
+        )
         new_position = replace(
             old_position,
             last_price=new_last,
-            market_value_native=old_position.quantity * new_last,
-            unrealized_pnl_native=(new_last - old_position.avg_cost) * old_position.quantity,
+            market_value_native=new_mv_native,
+            unrealized_pnl_native=new_pnl_native,
+            market_value_usd=conv.mv_usd,
+            unrealized_pnl_usd=conv.pnl_usd,
+            fx_is_stale=conv.fx_is_stale,
+            fx_is_fallback=conv.fx_is_fallback,
+            fx_unavailable=conv.fx_unavailable,
+            last_price_is_previous_close=False,
         )
         self._streaming[conid] = (new_position, contract, ticker)
         self._live_positions.set_position(new_position)

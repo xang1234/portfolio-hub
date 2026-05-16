@@ -43,7 +43,7 @@ async def test_put_then_get_name_cache_roundtrip(store):
 
     result = await store.get_name_cache(broker="IBKR", native_key="76792991")
 
-    assert result == ("700.HK", "TENCENT HOLDINGS LTD")
+    assert result == ("700.HK", "TENCENT HOLDINGS LTD", 1)
 
 
 async def test_get_name_cache_miss_returns_none(store):
@@ -57,7 +57,7 @@ async def test_put_name_cache_is_idempotent_upsert(store):
     await store.put_name_cache("IBKR", "1", "META.US", "META PLATFORMS INC")  # rename
 
     result = await store.get_name_cache("IBKR", "1")
-    assert result == ("META.US", "META PLATFORMS INC")
+    assert result == ("META.US", "META PLATFORMS INC", 1)
 
 
 async def test_name_cache_entries_older_than_ttl_are_returned_as_miss(store, monkeypatch):
@@ -80,5 +80,5 @@ async def test_name_cache_keyed_by_broker_and_native_key(store):
     await store.put_name_cache("IBKR", "1", "AAPL.US", "APPLE INC")
     await store.put_name_cache("Futu", "1", "DIFFERENT.US", "DIFFERENT CO")
 
-    assert await store.get_name_cache("IBKR", "1") == ("AAPL.US", "APPLE INC")
-    assert await store.get_name_cache("Futu", "1") == ("DIFFERENT.US", "DIFFERENT CO")
+    assert await store.get_name_cache("IBKR", "1") == ("AAPL.US", "APPLE INC", 1)
+    assert await store.get_name_cache("Futu", "1") == ("DIFFERENT.US", "DIFFERENT CO", 1)

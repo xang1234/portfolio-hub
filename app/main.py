@@ -43,6 +43,33 @@ def _state_to_string(state: ConnectionState) -> str:
     return _STATE_STRINGS[state]
 
 
+def _compute_totals(positions: list[Position]) -> dict:
+    """Aggregate USD market value and unrealized P&L across all positions.
+
+    Positions with fx_unavailable=True contribute 0 — we can't honestly
+    sum unknowns. The corresponding row displays — in its USD column so
+    the user knows the total is incomplete.
+
+    Returns a dict the index template can render directly. P&L sign and
+    percent are pre-computed here (rather than in the template) so the
+    template stays purely declarative.
+    """
+    total_mv_usd = sum(
+        p.market_value_usd for p in positions if not p.fx_unavailable
+    )
+    total_pnl_usd = sum(
+        p.unrealized_pnl_usd for p in positions if not p.fx_unavailable
+    )
+    pnl_pct = (total_pnl_usd / (total_mv_usd - total_pnl_usd) * 100.0
+               if (total_mv_usd - total_pnl_usd) != 0 else 0.0)
+    return {
+        "mv_usd": total_mv_usd,
+        "pnl_usd": total_pnl_usd,
+        "pnl_pct": pnl_pct,
+        "pnl_is_positive": total_pnl_usd >= 0,
+    }
+
+
 def create_app(
     *,
     broker: Broker | None = None,
@@ -58,6 +85,7 @@ def create_app(
     """
 
     store = None
+    fx_service = None
     if broker is None:
         manage_lifecycle = True
     else:
@@ -68,9 +96,10 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        nonlocal broker, store
+        nonlocal broker, store, fx_service
         if manage_lifecycle:
             from app.adapters.ibkr import IbkrAdapter
+            from app.core.fx import FxService
             from app.db.store import Store
 
             data_dir = Path(os.environ.get("DATA_DIR", "./data"))
@@ -81,12 +110,20 @@ def create_app(
             except Exception:
                 pass
 
+            # Wire the real public-API fetcher; tests pass api_fetcher=None
+            # or a stub to avoid network calls.
+            from app.core.fx import _default_api_fetcher
+            fx_service = FxService(store=store, api_fetcher=_default_api_fetcher)
+            await fx_service.start()
+            app.state.fx_service = fx_service
+
             broker = IbkrAdapter(
                 host=os.environ.get("IB_HOST", "ib-gateway"),
                 port=int(os.environ.get("IB_PORT", "4003")),
                 client_id=int(os.environ.get("IB_CLIENT_ID", "1")),
                 store=store,
                 live_positions=live_positions,
+                fx_service=fx_service,
             )
             app.state.broker = broker
             # start() never raises: on initial-connect failure (e.g. the
@@ -99,6 +136,11 @@ def create_app(
                 await broker.disconnect()
             except Exception:
                 pass
+            if fx_service is not None:
+                try:
+                    await fx_service.stop()
+                except Exception:
+                    pass
             if store is not None:
                 try:
                     await store.close()
@@ -189,10 +231,11 @@ def create_app(
             except NotImplementedError:
                 positions = []
         positions.sort(key=lambda p: p.market_value_native, reverse=True)
+        totals = _compute_totals(positions)
         return templates.TemplateResponse(
             request=request,
             name="index.html",
-            context={"state": state, "positions": positions},
+            context={"state": state, "positions": positions, "totals": totals},
         )
 
     return app
