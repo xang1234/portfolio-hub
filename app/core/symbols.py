@@ -93,6 +93,59 @@ _SUFFIX_TO_FLAG: dict[str, str] = {
 }
 
 
+# Currency code → English display name. Used for CASH-position rows.
+# CNH is the offshore-deliverable renminbi (Stock Connect A-shares clear
+# in CNH). CNY (onshore) is deliberately absent — slice 3's
+# validate_currency rejects CNY at the adapter boundary, and silently
+# mapping it here would risk misrepresenting onshore vs offshore holdings.
+CURRENCY_NAMES: dict[str, str] = {
+    "USD": "US Dollar",
+    "HKD": "Hong Kong Dollar",
+    "JPY": "Japanese Yen",
+    "KRW": "South Korean Won",
+    "TWD": "Taiwan Dollar",
+    "CNH": "Offshore Renminbi (CNH)",
+    "AUD": "Australian Dollar",
+    "GBP": "British Pound",
+    "EUR": "Euro",
+    "SGD": "Singapore Dollar",
+    "CHF": "Swiss Franc",
+    "CAD": "Canadian Dollar",
+    "SEK": "Swedish Krona",
+}
+
+
+# Currency code → flag emoji shown on CASH rows. HKD/TWD/CNH map to three
+# distinct flags so HK/TW/mainland-China holdings can never be confused.
+_CURRENCY_TO_FLAG: dict[str, str] = {
+    "USD": "🇺🇸",
+    "HKD": "🇭🇰",
+    "JPY": "🇯🇵",
+    "KRW": "🇰🇷",
+    "TWD": "🇹🇼",
+    "CNH": "🇨🇳",
+    "AUD": "🇦🇺",
+    "GBP": "🇬🇧",
+    "EUR": "🇪🇺",
+    "SGD": "🇸🇬",
+    "CHF": "🇨🇭",
+    "CAD": "🇨🇦",
+    "SEK": "🇸🇪",
+}
+
+
+def flag_for_currency(currency: str) -> str:
+    """Country/region flag emoji for an ISO currency code.
+
+    Raises ValueError on unknown currencies — silently defaulting could
+    mis-flag a Stock Connect CNH cash balance as something else.
+    """
+    try:
+        return _CURRENCY_TO_FLAG[currency]
+    except KeyError:
+        raise ValueError(f"unknown currency: {currency!r}") from None
+
+
 def canonical_symbol(native_symbol: str, primary_exchange: str) -> str:
     """Return a Longbridge-style canonical symbol like "700.HK" or "AAPL.US".
 

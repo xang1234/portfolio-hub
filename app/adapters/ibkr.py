@@ -24,7 +24,7 @@ from app.core.broker import AccountSummary, ConnectionState, Position
 from app.core.fx import FxConversion, FxService
 from app.core.live_positions import LivePositions
 from app.core.names import NameResolver
-from app.core.symbols import canonical_symbol
+from app.core.symbols import CURRENCY_NAMES, canonical_symbol
 from app.core.yahoo_quotes import default_yahoo_fetcher, yahoo_symbol_for
 from app.db.store import Store
 
@@ -176,31 +176,37 @@ class IbkrAdapter:
             return []
         ib_positions = await self._ib.reqPositionsAsync()
         stk_positions = [p for p in ib_positions if p.contract.secType == "STK"]
-        if not stk_positions:
+        cash_positions = [p for p in ib_positions if p.contract.secType == "CASH"]
+        if not stk_positions and not cash_positions:
             return []
 
-        # Snapshot last prices in one round-trip rather than one per row
-        contracts = [p.contract for p in stk_positions]
-        tickers = await self._ib.reqTickersAsync(*contracts)
-        last_prices = {c.conId: _coerce_last(t) for c, t in zip(contracts, tickers)}
-
-        # For positions without a live/delayed last (international markets
-        # without paid market-data subs — TSEJ, SBF, IBIS, etc.), fall back
-        # to the most recent daily-bar close via reqHistoricalData. Mark
-        # these so the row renderer can show a "prev close" subtext.
+        last_prices: dict[int, float] = {}
         previous_close_set: set[int] = set()
-        for contract in contracts:
-            if last_prices.get(contract.conId, 0.0) > 0:
-                continue
-            prev_close = await self._fetch_previous_close(contract)
-            if prev_close is not None and prev_close > 0:
-                last_prices[contract.conId] = prev_close
-                previous_close_set.add(contract.conId)
+        if stk_positions:
+            # Snapshot last prices in one round-trip rather than one per row
+            contracts = [p.contract for p in stk_positions]
+            tickers = await self._ib.reqTickersAsync(*contracts)
+            last_prices = {c.conId: _coerce_last(t) for c, t in zip(contracts, tickers)}
+
+            # For positions without a live/delayed last (international markets
+            # without paid market-data subs — TSEJ, SBF, IBIS, etc.), fall back
+            # to the most recent daily-bar close via reqHistoricalData. Mark
+            # these so the row renderer can show a "prev close" subtext.
+            for contract in contracts:
+                if last_prices.get(contract.conId, 0.0) > 0:
+                    continue
+                prev_close = await self._fetch_previous_close(contract)
+                if prev_close is not None and prev_close > 0:
+                    last_prices[contract.conId] = prev_close
+                    previous_close_set.add(contract.conId)
 
         # Make sure FxService has live subscriptions for every non-USD currency
-        # we're about to render. Idempotent — repeated calls are cheap.
+        # we're about to render (STK and CASH both contribute). Idempotent.
         if self._fx_service is not None:
-            currencies = {p.contract.currency for p in stk_positions} - {"USD"}
+            currencies = (
+                {p.contract.currency for p in stk_positions}
+                | {p.contract.currency for p in cash_positions}
+            ) - {"USD"}
             try:
                 await self._fx_service.ensure_subscribed(currencies)
             except Exception as exc:
@@ -213,6 +219,8 @@ class IbkrAdapter:
             )
             if position is not None:
                 out.append(position)
+        for ib_pos in cash_positions:
+            out.append(self._build_cash_position(ib_pos))
         return out
 
     async def _fetch_previous_close(self, contract) -> float | None:
@@ -324,6 +332,43 @@ class IbkrAdapter:
             fx_unavailable=conv.fx_unavailable,
             last_price_is_previous_close=is_prev_close,
             price_magnifier=price_magnifier,
+        )
+
+    def _build_cash_position(self, ib_pos) -> Position:
+        """Synthesize a Position from an IB CASH balance.
+
+        The instrument *is* the currency, so identity fields (native_key,
+        canonical_symbol, native_symbol) are all the currency code; there
+        is no exchange and no name to resolve. quantity is the balance,
+        last_price/avg_cost are 1.0 (the currency's "price" against itself).
+
+        v1 deliberately reports P&L as 0 — computing true USD P&L on FX
+        cash needs FX cost-basis IB doesn't track reliably.
+        """
+        currency = ib_pos.contract.currency
+        quantity = float(ib_pos.position)
+        conv = self._convert_to_usd(currency, quantity, 0.0)
+        name = CURRENCY_NAMES.get(currency, currency)
+        return Position(
+            broker=self.name,
+            account_id=ib_pos.account,
+            native_key=currency,
+            canonical_symbol=currency,
+            native_symbol=currency,
+            exchange="",
+            currency=currency,
+            name_en=name,
+            asset_class="CASH",
+            quantity=quantity,
+            avg_cost=1.0,
+            last_price=1.0,
+            market_value_native=quantity,
+            market_value_usd=conv.mv_usd,
+            unrealized_pnl_native=0.0,
+            unrealized_pnl_usd=0.0,
+            fx_is_stale=conv.fx_is_stale,
+            fx_is_fallback=conv.fx_is_fallback,
+            fx_unavailable=conv.fx_unavailable,
         )
 
     def _convert_to_usd(

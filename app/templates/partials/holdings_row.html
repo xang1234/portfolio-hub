@@ -1,8 +1,11 @@
 <tr id="row-{{ position.broker }}-{{ position.account_id }}-{{ position.canonical_symbol }}"
-    class="position-row">
+    class="position-row{% if position.asset_class == 'CASH' %} position-row--cash{% endif %}">
     <td class="col-name">
-        {% if position.exchange %}
-        <span class="flag" aria-label="{{ position.exchange }}">{{ flag_for_exchange(position.exchange) }}</span>
+        {% if position.asset_class == 'CASH' %}
+            <span class="cash-indicator" title="FX cash balance">💵</span>
+            <span class="flag" aria-label="{{ position.currency }}">{{ flag_for_currency(position.currency) }}</span>
+        {% elif position.exchange %}
+            <span class="flag" aria-label="{{ position.exchange }}">{{ flag_for_exchange(position.exchange) }}</span>
         {% endif %}
         <span class="name-en">{{ position.name_en }}</span>
         <span class="native-symbol">
@@ -11,10 +14,21 @@
                 <span class="fx-fallback-badge" title="FX rate from public-API fallback">📡</span>
             {% endif %}
         </span>
+        {% set row_market = (market_by_ib or {}).get(position.exchange) %}
+        {% if position.asset_class == 'STK' and row_market and row_market.state.value == 'LUNCH' %}
+        <span class="lunch-note"
+              title="The price shown is the most recent tick from before this midday session pause.">
+            (lunch break{% if row_market.next_transition_local %} — reopens {{ row_market.next_transition_local }}{% endif %})
+        </span>
+        {% endif %}
     </td>
     <td class="col-num">{{ "{:,.0f}".format(position.quantity) }}</td>
     <td class="col-num">
-        {% if position.last_price > 0 %}
+        {% if position.asset_class == 'CASH' %}
+            {# Last price for cash is 1.0 by definition — rendering "1.00"
+               adds noise without information, so show — instead. #}
+            —
+        {% elif position.last_price > 0 %}
             {{ "{:,.2f}".format(position.last_price) }}
             {% if position.price_magnifier > 1 %}
                 <small class="pence-suffix" title="Quoted in pence (1/100 of {{ position.currency }})">GBp</small>

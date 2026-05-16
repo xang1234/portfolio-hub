@@ -27,12 +27,17 @@ from app.core.markets import STATE_EMOJI, MarketHours, MarketStatus
 
 def _markets_from_positions(
     positions: list[Position], hours: MarketHours
-) -> tuple[list[MarketStatus], dict[str, str]]:
-    """Compute one MarketStatus per distinct STK exchange + flag lookup.
+) -> tuple[list[MarketStatus], dict[str, str], dict[str, MarketStatus]]:
+    """Compute one MarketStatus per distinct STK exchange + flag lookup +
+    by-IB-code lookup.
 
     CASH positions never contribute — they don't pin a venue. Unmapped
     exchange codes (status returns None) are silently dropped so an
     unknown venue doesn't crash the page.
+
+    The third returned value maps an IB exchange code (e.g. "SEHK") to
+    its MarketStatus so per-row template logic (lunch-break subtext)
+    can check the state of the row's own exchange.
     """
     from app.core.symbols import flag_for_exchange
 
@@ -45,16 +50,18 @@ def _markets_from_positions(
 
     markets: list[MarketStatus] = []
     flag_by_display: dict[str, str] = {}
+    status_by_ib_code: dict[str, MarketStatus] = {}
     for ib_exchange in seen:
         status = hours.status(ib_exchange)
         if status is None:
             continue
         markets.append(status)
+        status_by_ib_code[ib_exchange] = status
         try:
             flag_by_display[status.exchange] = flag_for_exchange(ib_exchange)
         except ValueError:
             flag_by_display[status.exchange] = ""
-    return markets, flag_by_display
+    return markets, flag_by_display, status_by_ib_code
 
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -191,16 +198,25 @@ def create_app(
 
     # Expose symbols helpers so templates can compute display data from
     # canonical fields without polluting the Position dataclass.
-    from app.core.symbols import flag_for_exchange
+    from app.core.symbols import flag_for_currency, flag_for_exchange
 
     templates.env.globals["flag_for_exchange"] = flag_for_exchange
+    templates.env.globals["flag_for_currency"] = flag_for_currency
 
     def render_rows(positions: list[Position]) -> str:
         if not positions:
             return ""
         template = templates.get_template("partials/holdings_row.html")
+        # SSE deltas don't currently re-evaluate market state per-tick;
+        # the lunch-subtext stays whatever the initial page-load showed
+        # until the next full refresh. An empty mapping is harmless —
+        # the template guards on it.
         return "".join(
-            template.render({"position": p, "flag_for_exchange": flag_for_exchange})
+            template.render({
+                "position": p,
+                "flag_for_exchange": flag_for_exchange,
+                "market_by_ib": {},
+            })
             for p in positions
         )
 
@@ -269,7 +285,9 @@ def create_app(
                 positions = []
         positions.sort(key=lambda p: p.market_value_native, reverse=True)
         totals = _compute_totals(positions)
-        markets, market_flag = _markets_from_positions(positions, market_hours)
+        markets, market_flag, market_by_ib = _markets_from_positions(
+            positions, market_hours,
+        )
         return templates.TemplateResponse(
             request=request,
             name="index.html",
@@ -280,6 +298,7 @@ def create_app(
                 "markets": markets,
                 "market_flag": market_flag,
                 "market_state_emoji": STATE_EMOJI,
+                "market_by_ib": market_by_ib,
                 "drawer_open": False,
             },
         )

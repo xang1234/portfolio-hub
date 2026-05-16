@@ -147,6 +147,16 @@ button.status-badge--retry:hover {
     margin-left: 0.25rem;
 }
 
+.position-row--cash .name-en {
+    /* Cash rows are about the currency, not a company — use a slightly
+     * softer tone so they don't compete visually with stock holdings. */
+    color: var(--pico-muted-color);
+}
+.position-row--cash .cash-indicator {
+    margin-right: 0.25rem;
+    font-size: 0.95rem;
+}
+
 .position-row .prev-close-note {
     display: block;
     color: var(--pico-muted-color);

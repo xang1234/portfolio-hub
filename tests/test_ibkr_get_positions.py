@@ -170,10 +170,11 @@ async def test_get_positions_returns_one_position_per_stk_holding(store):
     assert p.unrealized_pnl_usd == 0.0
 
 
-async def test_get_positions_filters_out_non_stk_secTypes(store):
+async def test_get_positions_filters_out_non_stk_non_cash_secTypes(store):
     """OPT, FUT, BOND, FUND, CRYPTO are all out of v1 scope.
 
-    CASH is also filtered for slice 2 — it returns in slice 6.
+    STK and CASH both pass through. See tests/test_ibkr_cash_positions.py
+    for the full CASH-rendering contract.
     """
     contracts = {
         1: FakeContract(conId=1, symbol="AAPL", secType="STK", currency="USD"),
@@ -204,8 +205,11 @@ async def test_get_positions_filters_out_non_stk_secTypes(store):
 
     positions = await adapter.get_positions()
 
-    assert [p.canonical_symbol for p in positions] == ["AAPL.US"]
-    assert positions[0].asset_class == "STK"
+    asset_classes = sorted(p.asset_class for p in positions)
+    assert asset_classes == ["CASH", "STK"]
+    # OPT, FUT, BOND filtered out
+    canonicals = sorted(p.canonical_symbol for p in positions)
+    assert canonicals == ["AAPL.US", "HKD"]
 
 
 async def test_get_positions_uses_primary_exchange_from_reqContractDetails_not_smart(store):
