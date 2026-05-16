@@ -22,6 +22,39 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.core.broker import Broker, ConnectionState, Position
 from app.core.live_positions import LivePositions, stream_events
+from app.core.markets import STATE_EMOJI, MarketHours, MarketStatus
+
+
+def _markets_from_positions(
+    positions: list[Position], hours: MarketHours
+) -> tuple[list[MarketStatus], dict[str, str]]:
+    """Compute one MarketStatus per distinct STK exchange + flag lookup.
+
+    CASH positions never contribute — they don't pin a venue. Unmapped
+    exchange codes (status returns None) are silently dropped so an
+    unknown venue doesn't crash the page.
+    """
+    from app.core.symbols import flag_for_exchange
+
+    seen: list[str] = []
+    for p in positions:
+        if p.asset_class != "STK":
+            continue
+        if p.exchange and p.exchange not in seen:
+            seen.append(p.exchange)
+
+    markets: list[MarketStatus] = []
+    flag_by_display: dict[str, str] = {}
+    for ib_exchange in seen:
+        status = hours.status(ib_exchange)
+        if status is None:
+            continue
+        markets.append(status)
+        try:
+            flag_by_display[status.exchange] = flag_for_exchange(ib_exchange)
+        except ValueError:
+            flag_by_display[status.exchange] = ""
+    return markets, flag_by_display
 
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -74,6 +107,7 @@ def create_app(
     *,
     broker: Broker | None = None,
     live_positions: LivePositions | None = None,
+    market_hours: MarketHours | None = None,
 ) -> FastAPI:
     """Build a FastAPI app with the given broker (and optional LivePositions).
 
@@ -93,6 +127,9 @@ def create_app(
 
     if live_positions is None:
         live_positions = LivePositions()
+
+    if market_hours is None:
+        market_hours = MarketHours()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -232,10 +269,19 @@ def create_app(
                 positions = []
         positions.sort(key=lambda p: p.market_value_native, reverse=True)
         totals = _compute_totals(positions)
+        markets, market_flag = _markets_from_positions(positions, market_hours)
         return templates.TemplateResponse(
             request=request,
             name="index.html",
-            context={"state": state, "positions": positions, "totals": totals},
+            context={
+                "state": state,
+                "positions": positions,
+                "totals": totals,
+                "markets": markets,
+                "market_flag": market_flag,
+                "market_state_emoji": STATE_EMOJI,
+                "drawer_open": False,
+            },
         )
 
     return app

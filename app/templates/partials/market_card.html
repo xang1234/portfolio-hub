@@ -1,0 +1,22 @@
+{# One per-exchange market-status card. Variables:
+   - market              : MarketStatus
+   - flag                : pre-resolved country flag emoji (e.g., 🇭🇰)
+   - market_state_emoji  : { state-name → emoji } map (shared with the drawer
+     glyph row; the route passes it from app.core.markets.STATE_EMOJI so the
+     two views can never drift apart).
+   The data-transition-iso attribute lets client JS render a live countdown
+   without any server push.
+#}
+<article class="market-card" data-transition-iso="{{ market.next_transition_iso }}">
+    <header class="market-card__head">
+        <span class="market-card__flag">{{ flag }}</span>
+        <span class="market-card__state">{{ market_state_emoji[market.state.value] }}</span>
+        <span class="market-card__exchange">{{ market.exchange }}</span>
+    </header>
+    {% if market.next_transition_local %}
+    <p class="market-card__transition">
+        {{ market.next_transition_label }} at <time>{{ market.next_transition_local }}</time>
+        <span class="market-card__countdown" data-countdown></span>
+    </p>
+    {% endif %}
+</article>

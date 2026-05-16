@@ -18,17 +18,24 @@ IB_EXCHANGE_TO_SUFFIX: dict[str, str] = {
     "IEX": "US",
     "PINK": "US",
     "ISLAND": "US",
-    # Hong Kong (NEVER grouped with mainland China)
+    # Hong Kong (NEVER grouped with mainland China). Stock Connect
+    # northbound listings (SEHKNTL, SEHKSZSE) trade on HKEX with HK
+    # session hours; still flagged 🇭🇰 even though the underlying
+    # is a mainland A-share.
     "SEHK": "HK",
     "HKEX": "HK",
+    "SEHKNTL": "HK",
+    "SEHKSZSE": "HK",
     # Taiwan (NEVER grouped with mainland China)
     "TWSE": "TW",
     "TPEX": "TW",      # Taiwan OTC market (distinct from TWSE main board)
     # Mainland China
     "SSE": "SH",
     "SZSE": "SZ",
-    # Japan
+    # Japan. IB uses both "TSEJ" and bare "TSE" for the Tokyo
+    # Stock Exchange depending on the contract.
     "TSEJ": "JP",
+    "TSE": "JP",
     "OSE": "JP",
     # South Korea
     "KSE": "KR",       # legacy name
