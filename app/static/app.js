@@ -34,14 +34,47 @@
         });
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', tick);
-    } else {
+    // Plan default: collapsed on portrait/narrow, expanded on desktop.
+    // Run once on first paint; user gestures override and persist via
+    // the native <details> element.
+    function syncDrawerDefault() {
+        const drawer = document.querySelector('.market-drawer');
+        if (!drawer) return;
+        if (drawer.dataset.userToggled === 'true') return;
+        drawer.open = window.matchMedia(
+            '(min-width: 768px) and (orientation: landscape)'
+        ).matches;
+    }
+
+    function markUserToggled(e) {
+        // Any user toggle disables the responsive default until reload.
+        e.currentTarget.dataset.userToggled = 'true';
+    }
+
+    function attachDrawerHandlers() {
+        const drawer = document.querySelector('.market-drawer');
+        if (!drawer || drawer.dataset.bound) return;
+        drawer.dataset.bound = 'true';
+        drawer.addEventListener('toggle', markUserToggled);
+    }
+
+    function onReady() {
         tick();
+        syncDrawerDefault();
+        attachDrawerHandlers();
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', onReady);
+    } else {
+        onReady();
     }
     // Re-run on every minute boundary so the displayed offset stays fresh.
     setInterval(tick, 60_000);
     // HTMX swaps replace nodes; rerun after each swap so newly inserted
     // cards get a countdown immediately.
-    document.body.addEventListener('htmx:afterSwap', tick);
+    document.body.addEventListener('htmx:afterSwap', function () {
+        tick();
+        attachDrawerHandlers();
+    });
 })();

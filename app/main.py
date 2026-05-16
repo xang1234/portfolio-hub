@@ -22,19 +22,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.core.broker import Broker, ConnectionState, Position
 from app.core.live_positions import LivePositions, stream_events
-from app.core.markets import MarketHours, MarketStatus
-
-
-# Emoji map for the market panel — kept here (not in markets.py) because it
-# is a pure presentation concern. The core domain doesn't care how the UI
-# decorates each state.
-_MARKET_STATE_EMOJI: dict[str, str] = {
-    "OPEN": "🟢",
-    "EXTENDED": "🌒",
-    "LUNCH": "🟡",
-    "CLOSED": "🔴",
-    "HOLIDAY": "⚫",
-}
+from app.core.markets import STATE_EMOJI, MarketHours, MarketStatus
 
 
 def _markets_from_positions(
@@ -291,7 +279,7 @@ def create_app(
                 "totals": totals,
                 "markets": markets,
                 "market_flag": market_flag,
-                "market_state_emoji": _MARKET_STATE_EMOJI,
+                "market_state_emoji": STATE_EMOJI,
                 "drawer_open": False,
             },
         )

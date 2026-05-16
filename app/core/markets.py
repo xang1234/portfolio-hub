@@ -8,7 +8,12 @@ exchange_calendars doesn't model them.
 
 The MarketStatus type is the only thing the rest of the app sees — the
 template renders one card per status.
+
+`from __future__ import annotations` is required because MarketHours.status
+returns `MarketStatus | None` but MarketStatus is defined further down;
+without deferred annotations the module fails to import on Python <3.14.
 """
+from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
@@ -111,6 +116,18 @@ _US_EXTENDED_EXCHANGES: frozenset[str] = frozenset(
 )
 
 
+# Per-state emoji shown in the drawer's collapsed glyph row and inside each
+# market card. Single source of truth — both the panel and the card partial
+# pull from this map so they can never drift apart.
+STATE_EMOJI: dict[str, str] = {
+    "OPEN": "🟢",
+    "EXTENDED": "🌒",
+    "LUNCH": "🟡",
+    "CLOSED": "🔴",
+    "HOLIDAY": "⚫",
+}
+
+
 # Exchange-local timezone abbreviations for the "16:00 HKT" line on the
 # market-status card. Hardcoded (rather than %Z) because the OS-provided
 # abbreviation varies by platform and splits across DST variants (EST/EDT).
@@ -140,12 +157,14 @@ def _format_local(utc_dt: datetime, cal, mic: str) -> str:
     """Render a UTC moment in the exchange's local time as 'HH:MM TZ'.
 
     Falls back to %Z if the MIC has no canonical label, which keeps newly
-    added venues from rendering an empty string.
+    added venues from rendering an empty string. Any unexpected attribute
+    or value error is logged so a silent regression is at least traceable.
     """
     label = _MIC_TO_TZ_LABEL.get(mic, "")
     try:
         local = utc_dt.astimezone(cal.tz)
-    except Exception:
+    except (AttributeError, ValueError, TypeError) as exc:
+        _LOG.warning("could not format local time for mic=%s: %s", mic, exc)
         return ""
     if label:
         return f"{local.strftime('%H:%M')} {label}"
@@ -208,8 +227,12 @@ class MarketHours:
 
         import pandas as pd
 
-        ts = pd.Timestamp(now)
-        date = ts.normalize().tz_convert(None) if ts.tz is not None else ts.normalize()
+        # Schedule sessions are labeled by their *local* trading-day date,
+        # so we must key by the venue's local date — not the UTC date.
+        # Indexing by UTC date corrupts venues whose session opens before
+        # UTC midnight (e.g. ASX during AEDT opens 23:00 UTC the prior day).
+        local_now = now.astimezone(cal.tz)
+        date = pd.Timestamp(local_now.date())
 
         def make_status(state, transition_dt, label, extended_session=None):
             if transition_dt is not None:

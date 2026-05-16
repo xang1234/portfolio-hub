@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from jinja2 import Environment, FileSystemLoader
 
 from app.core.broker import ConnectionState, Position
-from app.core.markets import MarketState, MarketStatus
+from app.core.markets import STATE_EMOJI, MarketState, MarketStatus
 
 
 TEMPLATES_DIR = "app/templates"
@@ -87,10 +87,12 @@ def _holiday_nyse() -> MarketStatus:
 # market_card.html partial ------------------------------------------------
 
 
-def _render_card(status: MarketStatus) -> str:
+def _render_card(status: MarketStatus, *, flag: str = "🏳️") -> str:
     env = _env()
     tmpl = env.get_template("partials/market_card.html")
-    return tmpl.render(market=status)
+    return tmpl.render(
+        market=status, flag=flag, market_state_emoji=STATE_EMOJI,
+    )
 
 
 def test_open_card_renders_green_emoji_and_close_time():
@@ -240,6 +242,43 @@ def test_index_drawer_glyph_row_shows_emoji_per_exchange_when_collapsed():
     # Flag for HKEX and NYSE both rendered
     assert "🇭🇰" in text
     assert "🇺🇸" in text
+
+
+def test_hk_tw_cn_render_as_three_distinct_cards_with_three_distinct_flags():
+    """Hard plan requirement: Hong Kong, Taiwan, and mainland China are
+    ALWAYS three separate entities. A portfolio holding all three must
+    show three cards (HKEX / TWSE / SSE) with three flags (🇭🇰 / 🇹🇼 / 🇨🇳)
+    — never merged into a single "Greater China" anything."""
+
+    def _pos(broker_key, sym, exchange, currency, name):
+        return Position(
+            broker="IBKR", account_id="U1", native_key=broker_key,
+            canonical_symbol=sym, native_symbol=sym.split(".")[0],
+            exchange=exchange, currency=currency,
+            name_en=name, asset_class="STK",
+            quantity=10.0, avg_cost=10.0, last_price=11.0,
+            market_value_native=110.0, market_value_usd=15.0,
+            unrealized_pnl_native=10.0, unrealized_pnl_usd=1.5,
+        )
+
+    positions = [
+        _pos("1", "700.HK", "SEHK", "HKD", "TENCENT"),
+        _pos("2", "2330.TW", "TWSE", "TWD", "TSMC"),
+        _pos("3", "600519.SH", "SSE", "CNH", "KWEICHOW MOUTAI"),
+    ]
+    client = _make_client(positions=positions)
+
+    response = client.get("/")
+    text = response.text
+
+    # Three flags, all present, all distinct codepoints
+    assert "🇭🇰" in text
+    assert "🇹🇼" in text
+    assert "🇨🇳" in text
+    # Three exchange display names
+    assert "HKEX" in text
+    assert "TWSE" in text
+    assert "SSE" in text
 
 
 def test_index_with_only_cash_positions_renders_no_market_cards():

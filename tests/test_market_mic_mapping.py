@@ -162,3 +162,25 @@ def test_hong_kong_taiwan_china_use_three_distinct_calendars():
     assert hk != tw
     assert tw != cn
     assert cn != hk
+
+
+# Every IB code with a market calendar must also have a country flag --------
+
+
+def test_every_mic_mapped_code_has_a_country_flag():
+    """If a venue can produce a market-status card, it must render a flag.
+    Otherwise the drawer shows an exchange name with no flag — and HK
+    Stock Connect codes (SEHKNTL, SEHKSZSE) were getting silent flag=''
+    fallback before this test landed."""
+    from app.core.markets import _IB_EXCHANGE_TO_MIC
+    from app.core.symbols import flag_for_exchange
+
+    missing = []
+    for ib_code in _IB_EXCHANGE_TO_MIC:
+        try:
+            flag_for_exchange(ib_code)
+        except ValueError:
+            missing.append(ib_code)
+    assert missing == [], (
+        f"IB codes mapped to a market calendar but missing a flag: {missing}"
+    )
