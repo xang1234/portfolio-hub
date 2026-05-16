@@ -72,8 +72,10 @@
     // Re-run on every minute boundary so the displayed offset stays fresh.
     setInterval(tick, 60_000);
     // HTMX swaps replace nodes; rerun after each swap so newly inserted
-    // cards get a countdown immediately.
-    document.body.addEventListener('htmx:afterSwap', function () {
+    // cards get a countdown immediately. Attach to `document` (not body)
+    // because the body itself may be the swap target — a body-scoped
+    // listener disappears with the old body element.
+    document.addEventListener('htmx:afterSwap', function () {
         tick();
         attachDrawerHandlers();
     });

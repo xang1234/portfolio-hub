@@ -70,7 +70,7 @@
     </thead>
     <tbody id="positions-tbody"
            hx-ext="sse"
-           sse-connect="/stream/holdings"
+           sse-connect="/stream/holdings{% if active_account and active_account != 'All' %}?account={{ active_account }}{% endif %}"
            sse-swap="snapshot,positions">
         {% for position in positions %}
         {% include "partials/holdings_row.html" %}
