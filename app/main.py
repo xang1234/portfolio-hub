@@ -10,6 +10,7 @@ manages its lifecycle via FastAPI lifespan.
 """
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import os
@@ -110,20 +111,65 @@ def _compute_totals(positions: list[Position]) -> dict:
     }
 
 
+# Every broker the Protocol can support, in display order. Filter chips
+# render this list and gray any that aren't in BROKERS_ENABLED so users
+# see the dimension exists before the adapter lands.
+_ALL_KNOWN_BROKERS: list[str] = ["IBKR", "Futu", "Tiger", "Longbridge"]
+
+
+def _enabled_brokers() -> frozenset[str]:
+    """Set of brokers that should be selectable. Driven by the
+    BROKERS_ENABLED env var (comma-separated, case-insensitive). v1
+    defaults to just IBKR."""
+    raw = os.environ.get("BROKERS_ENABLED", "ibkr")
+    by_lower = {b.lower(): b for b in _ALL_KNOWN_BROKERS}
+    out: set[str] = set()
+    for token in raw.split(","):
+        canonical = by_lower.get(token.strip().lower())
+        if canonical:
+            out.add(canonical)
+    return frozenset(out) or frozenset({"IBKR"})
+
+
+def _apply_filters(
+    positions: list[Position],
+    *,
+    active_account: str = "All",
+    active_asset: str = "All",
+    active_broker: str = "All",
+) -> list[Position]:
+    """Apply the three filter dimensions in turn. Returns a new list.
+
+    Hoisted out of the route so the SSE renderer can reuse it — sharing
+    one filter implementation prevents a live tick from reintroducing
+    rows the user just filtered out.
+    """
+    out = positions
+    if active_account and active_account != "All":
+        out = [p for p in out if p.account_id == active_account]
+    if active_asset and active_asset != "All":
+        out = [p for p in out if p.asset_class == active_asset]
+    if active_broker and active_broker != "All":
+        out = [p for p in out if p.broker == active_broker]
+    return out
+
+
 def _render_rows_for_filter(
     positions: list[Position],
     active_account: str = "All",
     *,
+    active_asset: str = "All",
+    active_broker: str = "All",
     templates_env=None,
 ) -> str:
-    """Render <tr> rows for the SSE payload, filtered by account.
+    """Render <tr> rows for the SSE payload, filtered by all dimensions.
 
-    Live ticks must respect the same ?account= filter the initial
-    page-load used — otherwise the first SSE event would overwrite a
-    filtered tbody with every account's rows. `active_account` is also
-    passed into the partial context so the per-row account pill is
-    suppressed under a specific-account filter (the pill is redundant
-    information when the user has already drilled down).
+    Live ticks must respect the same ?account= / ?asset= / ?broker=
+    filters the initial page-load used — otherwise the first SSE event
+    would overwrite a filtered tbody with the unfiltered set.
+    `active_account` is also passed into the partial context so the
+    per-row account pill is suppressed under a specific-account filter
+    (the pill is redundant when the user has already drilled down).
 
     `templates_env` is optional; tests omit it and a fresh Jinja2
     environment is built from `app/templates/`. The production app
@@ -133,8 +179,12 @@ def _render_rows_for_filter(
 
     from app.core.symbols import flag_for_currency, flag_for_exchange
 
-    if active_account and active_account != "All":
-        positions = [p for p in positions if p.account_id == active_account]
+    positions = _apply_filters(
+        positions,
+        active_account=active_account,
+        active_asset=active_asset,
+        active_broker=active_broker,
+    )
     if not positions:
         return ""
     if templates_env is None:
@@ -292,13 +342,18 @@ def create_app(
         )
 
     @app.get("/stream/holdings")
-    async def stream_holdings(request: Request, account: str | None = None):
+    async def stream_holdings(
+        request: Request,
+        account: str | None = None,
+        asset: str | None = None,
+        broker: str | None = None,
+    ):
         """SSE endpoint streaming row-level deltas of the current portfolio.
 
-        Honors the same ?account= filter the index route does so the
-        first SSE event after page load can't overwrite a filtered
-        tbody with every-account rows. Unknown / empty values resolve
-        to "All".
+        Honors the same ?account= / ?asset= / ?broker= filters the
+        index route does so the first SSE event after page load can't
+        overwrite a filtered tbody with unfiltered rows. Unknown /
+        empty values resolve to "All".
 
         The HTMX SSE extension on the client connects via `sse-connect`
         and listens for named events: 'snapshot' (initial full tbody on
@@ -306,17 +361,31 @@ def create_app(
         """
         live = request.app.state.live_positions
         active_account = account or "All"
+        active_asset = asset or "All"
+        active_broker = broker or "All"
 
         def filtered_render(positions: list[Position]) -> str:
             return _render_rows_for_filter(
-                positions, active_account=active_account, templates_env=templates.env,
+                positions,
+                active_account=active_account,
+                active_asset=active_asset,
+                active_broker=active_broker,
+                templates_env=templates.env,
             )
 
         generator = stream_events(live, filtered_render)
         return EventSourceResponse(generator)
 
     @app.get("/", response_class=HTMLResponse)
-    async def index(request: Request, account: str | None = None):
+    async def index(
+        request: Request,
+        account: str | None = None,
+        asset: str | None = None,
+        broker: str | None = None,
+    ):
+        # Query param `broker` shadows the upstream broker variable name;
+        # alias upfront so the rest of the handler reads clearly.
+        broker_filter = broker
         broker = request.app.state.broker
         live = request.app.state.live_positions
         conn_state = await broker.get_connection_state()
@@ -349,6 +418,24 @@ def create_app(
         else:
             shown_positions = [p for p in positions if p.account_id == active_account]
 
+        # Asset-class filter. Two real values; unknown → All. (CASH/STK
+        # are the only asset_class values v1 ever produces.)
+        valid_assets = {"STK", "CASH"}
+        active_asset = asset
+        if active_asset not in valid_assets:
+            active_asset = "All"
+        else:
+            shown_positions = [p for p in shown_positions if p.asset_class == active_asset]
+
+        # Broker filter. V1 only enables IBKR; the dimension is here so
+        # future Futu/Tiger/Longbridge adapters slot in without UI churn.
+        enabled_brokers = _enabled_brokers()
+        active_broker = broker_filter
+        if active_broker not in enabled_brokers:
+            active_broker = "All"
+        else:
+            shown_positions = [p for p in shown_positions if p.broker == active_broker]
+
         shown_positions = sorted(
             shown_positions, key=lambda p: p.market_value_native, reverse=True,
         )
@@ -372,6 +459,11 @@ def create_app(
                 "drawer_open": False,
                 "account_summaries": account_summaries,
                 "active_account": active_account,
+                "active_asset": active_asset,
+                "active_broker": active_broker,
+                "enabled_brokers": list(enabled_brokers),
+                "all_known_brokers": _ALL_KNOWN_BROKERS,
+                "updated_at_iso": datetime.now(timezone.utc).isoformat(),
             },
         )
 

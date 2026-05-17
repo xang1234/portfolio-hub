@@ -1,5 +1,20 @@
 <tr id="row-{{ position.broker }}-{{ position.account_id }}-{{ position.canonical_symbol }}"
-    class="position-row{% if position.asset_class == 'CASH' %} position-row--cash{% endif %}">
+    class="position-row{% if position.asset_class == 'CASH' %} position-row--cash{% endif %}"
+    data-quantity="{{ position.quantity }}"
+    data-last-price="{{ position.last_price }}"
+    data-mv-native="{{ position.market_value_native }}"
+    data-mv-usd="{{ position.market_value_usd }}"
+    data-pnl-usd="{{ position.unrealized_pnl_usd }}"
+    data-avg-cost="{{ position.avg_cost }}"
+    data-broker="{{ position.broker }}"
+    data-account="{{ position.account_id }}"
+    data-exchange="{{ position.exchange }}"
+    data-currency="{{ position.currency }}"
+    data-native-key="{{ position.native_key }}"
+    data-canonical-symbol="{{ position.canonical_symbol }}"
+    data-name-en="{{ position.name_en }}"
+    data-asset-class="{{ position.asset_class }}"
+    data-row-detail>
     <td class="col-name">
         {% if position.asset_class == 'CASH' %}
             <span class="cash-indicator" title="FX cash balance">💵</span>

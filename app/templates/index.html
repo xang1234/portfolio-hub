@@ -12,21 +12,72 @@
               title="Unrealized P&amp;L %">{% if totals.pnl_is_positive %}+{% endif %}{{ "{:.2f}".format(totals.pnl_pct) }}%</span>
     </div>
     {% endif %}
+    <span class="updated-timestamp"
+          data-updated-at="{{ updated_at_iso }}"
+          title="Last update">…</span>
 </div>
+<div class="broker-badges" aria-label="Broker connections">
+    {% for b in all_known_brokers %}
+        {% if b in enabled_brokers %}
+            {% if b == 'IBKR' and state == 'connected' %}
+                <span class="broker-badge broker-badge--connected">🟢 {{ b }}</span>
+            {% elif b == 'IBKR' %}
+                <span class="broker-badge broker-badge--disconnected">🔴 {{ b }}</span>
+            {% else %}
+                <span class="broker-badge broker-badge--connected">🟢 {{ b }}</span>
+            {% endif %}
+        {% else %}
+            <span class="broker-badge broker-badge--disabled" title="{{ b }} adapter not enabled yet">⚫ {{ b }}</span>
+        {% endif %}
+    {% endfor %}
+</div>
+{# Build a helper for chip URLs that preserves the OTHER filter values. #}
+{% macro chip_url(account=None, asset=None, broker=None) -%}
+    {%- set parts = [] -%}
+    {%- if broker and broker != 'All' %}{{ parts.append('broker=' ~ broker) or '' }}{% endif -%}
+    {%- if account and account != 'All' %}{{ parts.append('account=' ~ account) or '' }}{% endif -%}
+    {%- if asset and asset != 'All' %}{{ parts.append('asset=' ~ asset) or '' }}{% endif -%}
+    /{% if parts %}?{{ parts|join('&') }}{% endif %}
+{%- endmacro %}
+<nav class="broker-chips" aria-label="Filter by broker">
+    <a class="broker-chip{% if active_broker == 'All' %} broker-chip--active{% endif %}"
+       href="{{ chip_url(account=active_account, asset=active_asset, broker='All') }}"
+       hx-get="{{ chip_url(account=active_account, asset=active_asset, broker='All') }}" hx-push-url="true" hx-target="body" hx-swap="outerHTML"
+       {% if active_broker == 'All' %}aria-current="page"{% endif %}>All</a>
+    {% for b in all_known_brokers %}
+        {% if b in enabled_brokers %}
+        <a class="broker-chip{% if active_broker == b %} broker-chip--active{% endif %}"
+           href="{{ chip_url(account=active_account, asset=active_asset, broker=b) }}"
+           hx-get="{{ chip_url(account=active_account, asset=active_asset, broker=b) }}" hx-push-url="true" hx-target="body" hx-swap="outerHTML"
+           {% if active_broker == b %}aria-current="page"{% endif %}>{{ b }}</a>
+        {% else %}
+        <span class="broker-chip broker-chip--disabled"
+              title="{{ b }} adapter not enabled yet">{{ b }}</span>
+        {% endif %}
+    {% endfor %}
+</nav>
 {% if account_summaries and account_summaries|length > 1 %}
 <nav class="account-chips" aria-label="Filter by account">
     <a class="account-chip{% if active_account == 'All' %} account-chip--active{% endif %}"
-       href="/?account=All"
-       hx-get="/?account=All" hx-push-url="true" hx-target="body" hx-swap="outerHTML"
+       href="{{ chip_url(account='All', asset=active_asset, broker=active_broker) }}"
+       hx-get="{{ chip_url(account='All', asset=active_asset, broker=active_broker) }}" hx-push-url="true" hx-target="body" hx-swap="outerHTML"
        {% if active_account == 'All' %}aria-current="page"{% endif %}>All</a>
     {% for s in account_summaries %}
     <a class="account-chip{% if active_account == s.account_id %} account-chip--active{% endif %}"
-       href="/?account={{ s.account_id }}"
-       hx-get="/?account={{ s.account_id }}" hx-push-url="true" hx-target="body" hx-swap="outerHTML"
+       href="{{ chip_url(account=s.account_id, asset=active_asset, broker=active_broker) }}"
+       hx-get="{{ chip_url(account=s.account_id, asset=active_asset, broker=active_broker) }}" hx-push-url="true" hx-target="body" hx-swap="outerHTML"
        {% if active_account == s.account_id %}aria-current="page"{% endif %}>{{ s.account_id }}</a>
     {% endfor %}
 </nav>
 {% endif %}
+<nav class="asset-chips" aria-label="Filter by asset class">
+    {% for label in ['All', 'STK', 'CASH'] %}
+    <a class="asset-chip{% if active_asset == label %} asset-chip--active{% endif %}"
+       href="{{ chip_url(account=active_account, asset=label, broker=active_broker) }}"
+       hx-get="{{ chip_url(account=active_account, asset=label, broker=active_broker) }}" hx-push-url="true" hx-target="body" hx-swap="outerHTML"
+       {% if active_asset == label %}aria-current="page"{% endif %}>{{ label }}</a>
+    {% endfor %}
+</nav>
 {% if active_account and active_account != 'All' %}
 {% set selected = (account_summaries | selectattr('account_id', 'equalto', active_account) | list | first) %}
 {% if selected %}
@@ -41,6 +92,44 @@
 {% endblock %}
 
 {% block content %}
+<div x-data="{ row: null }"
+     @row-detail.window="row = $event.detail"
+     @keydown.escape.window="row = null">
+<dialog class="row-detail-modal"
+        x-show="row !== null"
+        x-cloak
+        x-init="$watch('row', v => v ? $el.showModal() : $el.close())"
+        @click="if (event.target === $el) row = null"
+        aria-modal="true">
+    <template x-if="row">
+    <article>
+        <header>
+            <h3 x-text="row.nameEn"></h3>
+            <p class="muted">
+                <span x-text="row.canonicalSymbol"></span> ·
+                <span x-text="row.exchange"></span> ·
+                <span x-text="row.currency"></span>
+            </p>
+        </header>
+        <dl class="row-detail-grid">
+            <dt>Broker</dt><dd x-text="row.broker"></dd>
+            <dt>Account</dt><dd x-text="row.account"></dd>
+            <dt>Asset class</dt><dd x-text="row.assetClass"></dd>
+            <dt>Native key</dt><dd x-text="row.nativeKey"></dd>
+            <dt>Quantity</dt><dd x-text="Number(row.quantity).toLocaleString()"></dd>
+            <dt>Avg cost (native)</dt><dd x-text="Number(row.avgCost).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}) + ' ' + row.currency"></dd>
+            <dt>Last price (native)</dt><dd x-text="Number(row.lastPrice).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}) + ' ' + row.currency"></dd>
+            <dt>Market value (native)</dt><dd x-text="Number(row.mvNative).toLocaleString(undefined,{maximumFractionDigits:0}) + ' ' + row.currency"></dd>
+            <dt>Market value (USD)</dt><dd x-text="'$' + Number(row.mvUsd).toLocaleString(undefined,{maximumFractionDigits:0})"></dd>
+            <dt>Unrealized P&amp;L (USD)</dt><dd x-text="'$' + Number(row.pnlUsd).toLocaleString(undefined,{maximumFractionDigits:0})"></dd>
+        </dl>
+        <footer>
+            <button type="button" @click="row = null">Close</button>
+        </footer>
+    </article>
+    </template>
+</dialog>
+</div>
 {% if markets %}
 <details class="market-drawer" {% if drawer_open %}open{% endif %}>
     <summary class="market-drawer__summary">
@@ -62,15 +151,27 @@
     <thead>
         <tr>
             <th class="col-name">Holding</th>
-            <th class="col-num">Qty</th>
-            <th class="col-num">Last</th>
-            <th class="col-num">Market Value</th>
-            <th class="col-num">MV USD</th>
+            <th class="col-num sortable" data-sort-key="quantity" role="button" tabindex="0">
+                Qty <span class="sort-indicator" data-sort-indicator></span>
+            </th>
+            <th class="col-num sortable" data-sort-key="last_price" role="button" tabindex="0">
+                Last <span class="sort-indicator" data-sort-indicator></span>
+            </th>
+            <th class="col-num sortable" data-sort-key="mv_native" role="button" tabindex="0">
+                Market Value <span class="sort-indicator" data-sort-indicator></span>
+            </th>
+            <th class="col-num sortable" data-sort-key="mv_usd" role="button" tabindex="0">
+                MV USD <span class="sort-indicator" data-sort-indicator></span>
+            </th>
         </tr>
     </thead>
+    {%- set sse_qs = [] -%}
+    {%- if active_account and active_account != 'All' %}{{ sse_qs.append('account=' ~ active_account) or '' }}{% endif -%}
+    {%- if active_asset and active_asset != 'All' %}{{ sse_qs.append('asset=' ~ active_asset) or '' }}{% endif -%}
+    {%- if active_broker and active_broker != 'All' %}{{ sse_qs.append('broker=' ~ active_broker) or '' }}{% endif -%}
     <tbody id="positions-tbody"
            hx-ext="sse"
-           sse-connect="/stream/holdings{% if active_account and active_account != 'All' %}?account={{ active_account }}{% endif %}"
+           sse-connect="/stream/holdings{% if sse_qs %}?{{ sse_qs|join('&') }}{% endif %}"
            sse-swap="snapshot,positions">
         {% for position in positions %}
         {% include "partials/holdings_row.html" %}

@@ -1,3 +1,22 @@
+.pull-refresh-indicator {
+    position: fixed;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0.3rem 0.7rem;
+    background: var(--pico-primary-background);
+    color: var(--pico-primary-inverse);
+    font-size: 0.8rem;
+    border-radius: 0 0 0.4rem 0.4rem;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    z-index: 200;
+    pointer-events: none;
+}
+.pull-refresh-indicator--visible {
+    opacity: 1;
+}
+
 .app-header {
     position: sticky;
     top: 0;
@@ -90,6 +109,24 @@ button.status-badge--retry:hover {
     color: var(--pico-muted-color);
     padding: 0.5rem 0.5rem;
     border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.holdings-table th.sortable {
+    cursor: pointer;
+    user-select: none;
+}
+.holdings-table th.sortable:hover {
+    color: var(--pico-color);
+}
+.holdings-table th.sortable.sort-active {
+    color: var(--pico-color);
+}
+.sort-indicator {
+    display: inline-block;
+    width: 0.8em;
+    text-align: center;
+    margin-left: 0.15rem;
+    font-size: 0.7rem;
 }
 
 /* Make numeric columns shrink to fit their content, leaving the rest for
@@ -199,6 +236,110 @@ button.status-badge--retry:hover {
     font-weight: 600;
 }
 
+.broker-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    padding: 0.25rem 1rem 0;
+    font-size: 0.8rem;
+}
+.broker-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    background: var(--pico-muted-color);
+    color: var(--pico-background-color);
+}
+.broker-badge--connected {
+    background: rgba(46, 160, 67, 0.15);
+    color: var(--pico-color-green-700, #1f7a32);
+}
+.broker-badge--disconnected {
+    background: rgba(207, 34, 46, 0.15);
+    color: var(--pico-color-red-700, #a40e26);
+}
+.broker-badge--disabled {
+    opacity: 0.45;
+    background: transparent;
+    color: var(--pico-muted-color);
+}
+
+.updated-timestamp {
+    color: var(--pico-muted-color);
+    font-size: 0.75rem;
+    margin-left: auto;
+    align-self: center;
+    font-variant-numeric: tabular-nums;
+}
+
+.broker-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    padding: 0.4rem 1rem 0;
+    margin: 0;
+}
+.broker-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+    padding: 0.2rem 0.65rem;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 999px;
+    background: var(--pico-background-color);
+    color: var(--pico-color);
+    font-size: 0.85rem;
+    text-decoration: none;
+    cursor: pointer;
+}
+.broker-chip:hover {
+    background: var(--pico-muted-color);
+    color: var(--pico-background-color);
+}
+.broker-chip--active {
+    background: var(--pico-primary-background);
+    color: var(--pico-primary-inverse);
+    border-color: var(--pico-primary-background);
+    font-weight: 600;
+}
+.broker-chip--disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.asset-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    padding: 0.4rem 1rem 0;
+    margin: 0;
+}
+.asset-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+    padding: 0.2rem 0.65rem;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 999px;
+    background: var(--pico-background-color);
+    color: var(--pico-color);
+    font-size: 0.85rem;
+    text-decoration: none;
+    cursor: pointer;
+}
+.asset-chip:hover {
+    background: var(--pico-muted-color);
+    color: var(--pico-background-color);
+}
+.asset-chip--active {
+    background: var(--pico-primary-background);
+    color: var(--pico-primary-inverse);
+    border-color: var(--pico-primary-background);
+    font-weight: 600;
+}
+
 .account-summary {
     margin: 0.3rem 1rem 0.5rem;
     font-size: 0.85rem;
@@ -220,6 +361,54 @@ button.status-badge--retry:hover {
 }
 @media (max-width: 480px) and (orientation: portrait) {
     .account-pill { display: none; }
+}
+
+/* Row-detail modal --------------------------------------------------- */
+
+.row-detail-modal {
+    border: none;
+    border-radius: 0.5rem;
+    padding: 0;
+    max-width: 480px;
+    width: 95vw;
+    background: var(--pico-background-color);
+    color: var(--pico-color);
+}
+.row-detail-modal::backdrop {
+    background: rgba(0, 0, 0, 0.4);
+}
+.row-detail-modal article {
+    padding: 1rem 1.2rem 1.2rem;
+    margin: 0;
+}
+.row-detail-modal h3 {
+    margin: 0 0 0.25rem;
+}
+.row-detail-modal .muted {
+    color: var(--pico-muted-color);
+    font-size: 0.85rem;
+    margin: 0 0 0.75rem;
+}
+.row-detail-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    column-gap: 0.75rem;
+    row-gap: 0.25rem;
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+}
+.row-detail-grid dt {
+    color: var(--pico-muted-color);
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+.row-detail-grid dd {
+    margin: 0;
+    font-size: 0.9rem;
+}
+.row-detail-modal footer {
+    margin-top: 1rem;
+    text-align: right;
 }
 
 /* Market-hours drawer + cards ----------------------------------------- */
