@@ -108,9 +108,10 @@ def test_chip_links_to_query_string():
     positions = [_pos("U1", "AAPL.US"), _pos("U2", "MSFT.US")]
     response = _client(positions, accounts).get("/")
 
-    assert "?account=U1" in response.text
-    assert "?account=U2" in response.text
-    assert "?account=All" in response.text
+    assert "account=U1" in response.text
+    assert "account=U2" in response.text
+    # The All chip leaves the URL parameter-free (clean default URL)
+    assert 'href="/"' in response.text or "href='/'" in response.text
 
 
 def test_only_all_chip_visible_when_single_account():

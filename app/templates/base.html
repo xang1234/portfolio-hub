@@ -9,9 +9,12 @@
     <link rel="stylesheet" href="/static/app.css">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <script src="/static/app.js" defer></script>
+    <style>[x-cloak]{display:none!important}</style>
 </head>
 <body>
+    <div class="pull-refresh-indicator" data-pull-indicator aria-hidden="true">↓ Pull to refresh</div>
     <header class="app-header">
         {% block header %}{% endblock %}
     </header>

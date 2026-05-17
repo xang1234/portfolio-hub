@@ -10,6 +10,7 @@ manages its lifecycle via FastAPI lifespan.
 """
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import os
@@ -108,6 +109,26 @@ def _compute_totals(positions: list[Position]) -> dict:
         "pnl_pct": pnl_pct,
         "pnl_is_positive": total_pnl_usd >= 0,
     }
+
+
+# Every broker the Protocol can support, in display order. Filter chips
+# render this list and gray any that aren't in BROKERS_ENABLED so users
+# see the dimension exists before the adapter lands.
+_ALL_KNOWN_BROKERS: list[str] = ["IBKR", "Futu", "Tiger", "Longbridge"]
+
+
+def _enabled_brokers() -> frozenset[str]:
+    """Set of brokers that should be selectable. Driven by the
+    BROKERS_ENABLED env var (comma-separated, case-insensitive). v1
+    defaults to just IBKR."""
+    raw = os.environ.get("BROKERS_ENABLED", "ibkr")
+    by_lower = {b.lower(): b for b in _ALL_KNOWN_BROKERS}
+    out: set[str] = set()
+    for token in raw.split(","):
+        canonical = by_lower.get(token.strip().lower())
+        if canonical:
+            out.add(canonical)
+    return frozenset(out) or frozenset({"IBKR"})
 
 
 def _render_rows_for_filter(
@@ -316,7 +337,15 @@ def create_app(
         return EventSourceResponse(generator)
 
     @app.get("/", response_class=HTMLResponse)
-    async def index(request: Request, account: str | None = None):
+    async def index(
+        request: Request,
+        account: str | None = None,
+        asset: str | None = None,
+        broker: str | None = None,
+    ):
+        # Query param `broker` shadows the upstream broker variable name;
+        # alias upfront so the rest of the handler reads clearly.
+        broker_filter = broker
         broker = request.app.state.broker
         live = request.app.state.live_positions
         conn_state = await broker.get_connection_state()
@@ -349,6 +378,24 @@ def create_app(
         else:
             shown_positions = [p for p in positions if p.account_id == active_account]
 
+        # Asset-class filter. Two real values; unknown → All. (CASH/STK
+        # are the only asset_class values v1 ever produces.)
+        valid_assets = {"STK", "CASH"}
+        active_asset = asset
+        if active_asset not in valid_assets:
+            active_asset = "All"
+        else:
+            shown_positions = [p for p in shown_positions if p.asset_class == active_asset]
+
+        # Broker filter. V1 only enables IBKR; the dimension is here so
+        # future Futu/Tiger/Longbridge adapters slot in without UI churn.
+        enabled_brokers = _enabled_brokers()
+        active_broker = broker_filter
+        if active_broker not in enabled_brokers:
+            active_broker = "All"
+        else:
+            shown_positions = [p for p in shown_positions if p.broker == active_broker]
+
         shown_positions = sorted(
             shown_positions, key=lambda p: p.market_value_native, reverse=True,
         )
@@ -372,6 +419,11 @@ def create_app(
                 "drawer_open": False,
                 "account_summaries": account_summaries,
                 "active_account": active_account,
+                "active_asset": active_asset,
+                "active_broker": active_broker,
+                "enabled_brokers": list(enabled_brokers),
+                "all_known_brokers": _ALL_KNOWN_BROKERS,
+                "updated_at_iso": datetime.now(timezone.utc).isoformat(),
             },
         )
 
