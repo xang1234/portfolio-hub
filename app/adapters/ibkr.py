@@ -135,7 +135,6 @@ class IbkrAdapter:
             except Exception:
                 pass
         self._ib = ib
-        self._connection_state = ConnectionState.CONNECTED
         if self._store is not None:
             self._name_resolver = NameResolver(
                 store=self._store, fetcher=self._fetch_contract_details
@@ -148,7 +147,25 @@ class IbkrAdapter:
         if disconnected_event is not None:
             disconnected_event += self._handle_disconnect
         if self._live_positions is not None:
-            await self._start_streaming()
+            # If streaming setup fails (e.g. gateway accepted TCP but is still
+            # loading accounts, reqPositionsAsync errors), bail out so the
+            # reconnect loop sees the failure and retries. Setting state =
+            # CONNECTED before this would wedge: the loop's `if state ==
+            # CONNECTED: return` early-out would exit on the next iteration
+            # without reattaching streaming, and hooks would never fire.
+            try:
+                await self._start_streaming()
+            except Exception:
+                self._ib = None
+                if disconnected_event is not None:
+                    try:
+                        disconnected_event -= self._handle_disconnect
+                    except Exception:
+                        pass
+                raise
+        # State flips to CONNECTED only once everything above succeeded —
+        # ensures the reconnect loop never sees a half-wired adapter.
+        self._connection_state = ConnectionState.CONNECTED
 
     async def disconnect(self) -> None:
         # Cancel any in-flight reconnect loop first so it can't race ahead and
@@ -568,17 +585,26 @@ class IbkrAdapter:
         session is dead anyway) and also breaks the ticker→handler→adapter
         reference cycle so the old tickers can be garbage-collected.
         """
-        for _conid, (_pos, _contract, ticker) in list(self._streaming.items()):
+        for conid, (_pos, _contract, ticker) in list(self._streaming.items()):
             update_event = getattr(ticker, "updateEvent", None)
             if update_event is None:
                 continue
             try:
                 update_event -= self._on_ticker_update
-            except Exception:
-                pass
+            except Exception as exc:
+                _LOG.debug(
+                    "Failed to deregister tick handler for conId=%s: %s",
+                    conid, exc,
+                )
 
     def _mark_live_positions_stale(self) -> None:
-        """Flip last_price_is_stale=True on every currently-known Position.
+        """Flip last_price_is_stale=True on every currently-known STK Position.
+
+        CASH rows are excluded: their "price" is the currency-vs-itself rate
+        of 1.0 which never ticks, so labelling them stale (with a "price hasn't
+        ticked since the disconnect" tooltip) is misleading. The dimmed-row
+        signal alone doesn't apply to cash either; CASH rows simply pass
+        through the reconnect window unchanged.
 
         Done synchronously inside the disconnectedEvent handler so the very
         next render (status badge swap, SSE delta from a pending tick that
@@ -588,6 +614,8 @@ class IbkrAdapter:
         if self._live_positions is None:
             return
         for old in self._live_positions.get_all():
+            if old.asset_class == "CASH":
+                continue
             if old.last_price_is_stale:
                 continue
             self._live_positions.set_position(replace(old, last_price_is_stale=True))
@@ -601,9 +629,17 @@ class IbkrAdapter:
         """
         try:
             for attempt, delay in enumerate(self._reconnect_delays, start=1):
+                # `attempt` is 1-indexed, so `_reconnect_delays[attempt]` is
+                # the delay AFTER this one (or end-of-schedule).
+                next_after = (
+                    self._reconnect_delays[attempt]
+                    if attempt < len(self._reconnect_delays)
+                    else None
+                )
                 _LOG.info(
-                    "Reconnect attempt %d will fire in %.1fs (next delay: %.1fs)",
-                    attempt, delay, delay,
+                    "Reconnect attempt %d will fire in %.1fs (next delay: %s)",
+                    attempt, delay,
+                    f"{next_after:.1f}s" if next_after is not None else "exhausted",
                 )
                 self._current_backoff_delay = delay
                 await asyncio.sleep(delay)

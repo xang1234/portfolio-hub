@@ -174,6 +174,52 @@ async def test_disconnect_marks_live_positions_as_stale(store):
 # Tick after reconnect clears the stale flag -----------------------------
 
 
+async def test_cash_positions_are_not_marked_stale_on_disconnect(store):
+    """CASH 'prices' are always 1.0 (currency vs itself) — they never tick.
+    Marking them stale would render a misleading 'price hasn't ticked' ⚠️
+    tooltip on a row that doesn't even have a real last_price."""
+    from app.adapters.ibkr import IbkrAdapter
+    from app.core.broker import Position
+
+    # Seed a CASH-only LivePositions directly (we don't need a real CASH
+    # IB position fixture — the mark-stale walker doesn't care how rows got
+    # in).
+    live = LivePositions()
+    cash = Position(
+        broker="IBKR", account_id="U1", native_key="HKD",
+        canonical_symbol="HKD", native_symbol="HKD",
+        exchange="", currency="HKD", name_en="Hong Kong Dollar",
+        asset_class="CASH", quantity=50000.0, avg_cost=1.0, last_price=1.0,
+        market_value_native=50000.0, market_value_usd=6410.0,
+        unrealized_pnl_native=0.0, unrealized_pnl_usd=0.0,
+    )
+    live.set_position(cash)
+
+    pos, details = _tencent()
+    fake_ib = FakeIB(
+        positions=[pos], contract_details={76792991: details},
+        last_prices={76792991: 420.0},
+    )
+    adapter = IbkrAdapter(
+        host="ib-gateway", port=4003, client_id=1,
+        ib_factory=lambda: fake_ib, store=store, live_positions=live,
+        reconnect_delays=[10.0],  # long delay so we observe the disconnect window
+    )
+    await adapter.connect()
+
+    fake_ib.simulate_disconnect()
+
+    rows = {p.canonical_symbol: p for p in live.get_all()}
+    assert rows["700.HK"].last_price_is_stale, (
+        "STK rows should be marked stale during reconnect"
+    )
+    assert not rows["HKD"].last_price_is_stale, (
+        "CASH rows must not be marked stale (their 'price' is the currency itself)"
+    )
+
+    await adapter.disconnect()
+
+
 async def test_tick_after_reconnect_clears_stale_flag(store):
     """The natural-clearing semantics: when a real tick arrives, the
     replaced Position has stale=False. No explicit clearing needed."""
