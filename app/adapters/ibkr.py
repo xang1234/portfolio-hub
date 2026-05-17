@@ -510,6 +510,15 @@ class IbkrAdapter:
         Registration is idempotent: passing the same callable twice keeps it
         in the list once, so features registering both at startup and on
         config reload don't get double-fired.
+
+        IMPORTANT — this fires on RECONNECTS ONLY, never after the initial
+        connect(). Callers that need a handler on the very first IB session
+        must wire it independently at startup (e.g. attach the
+        execDetailsEvent handler immediately after `await adapter.start()`)
+        AND register an `on_reconnected` hook to re-attach the same handler
+        across subsequent gateway restarts. A caller that registers only
+        the hook will silently miss events on first boot until the first
+        daily restart.
         """
         if callback in self._reconnect_hooks:
             return
@@ -535,14 +544,38 @@ class IbkrAdapter:
         Also marks every Position in live_positions stale so the renderer can
         show ⚠️/dim until the next real tick replaces them.
         Idempotent — if we're already reconnecting, leaves the existing task alone.
+
+        Order matters: deregister tick handlers BEFORE marking stale. Otherwise
+        a pending tick callback queued before the disconnect can fire between
+        the two and re-write the Position with `last_price_is_stale=False`,
+        masking the disconnect from the user.
         """
         if self._connection_state == ConnectionState.RECONNECTING:
             return
         self._connection_state = ConnectionState.RECONNECTING
         _LOG.warning("Gateway disconnected; entering RECONNECTING state")
+        self._deregister_tick_handlers()
         self._mark_live_positions_stale()
         if self._reconnect_task is None or self._reconnect_task.done():
             self._reconnect_task = asyncio.create_task(self._reconnect_loop())
+
+    def _deregister_tick_handlers(self) -> None:
+        """Unbind _on_ticker_update from every live ticker without touching IB.
+
+        Done synchronously inside the disconnect handler so a pending ib_async
+        callback can't sneak in between mark-stale and the _streaming.clear()
+        that runs later in the reconnect loop. Skips cancelMktData (the IB
+        session is dead anyway) and also breaks the ticker→handler→adapter
+        reference cycle so the old tickers can be garbage-collected.
+        """
+        for _conid, (_pos, _contract, ticker) in list(self._streaming.items()):
+            update_event = getattr(ticker, "updateEvent", None)
+            if update_event is None:
+                continue
+            try:
+                update_event -= self._on_ticker_update
+            except Exception:
+                pass
 
     def _mark_live_positions_stale(self) -> None:
         """Flip last_price_is_stale=True on every currently-known Position.

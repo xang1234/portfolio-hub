@@ -162,3 +162,13 @@ def test_badge_connected_has_no_countdown():
     response = _client(adapter).get("/healthz", headers={"HX-Request": "true"})
     assert "(5s)" not in response.text
     assert "(15s)" not in response.text
+
+
+def test_badge_explicit_zero_delay_still_renders_countdown():
+    """`{% if backoff_delay %}` would treat 0.0 as falsy and suppress the
+    countdown. The semantic signal "no delay active" is None, not 0.0 — so
+    a 0.0 (sub-second delay used in tests, or a synchronous test fixture)
+    should still render as "(0s)" while RECONNECTING."""
+    adapter = _StubAdapter(ConnectionState.RECONNECTING, delay=0.0)
+    response = _client(adapter).get("/healthz", headers={"HX-Request": "true"})
+    assert "(0s)" in response.text

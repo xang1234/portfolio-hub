@@ -82,6 +82,16 @@ class Broker(Protocol):
 
     async def get_connection_state(self) -> ConnectionState: ...
 
+    def current_backoff_delay(self) -> float | None:
+        """Optional capability: returns the seconds the reconnect loop is
+        currently sleeping while in RECONNECTING state, else None.
+
+        Adapters without reconnect backoff (or that don't surface it) should
+        return None. The /healthz status badge uses this to render
+        "🟡 IBKR reconnecting (5s)" / "(15s)" / "(60s)" as the loop progresses.
+        """
+        return None
+
     async def get_positions(self) -> list[Position]: ...
 
     async def get_account_summary(self) -> list[AccountSummary]: ...

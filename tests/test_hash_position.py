@@ -104,6 +104,18 @@ def test_different_native_key_does_not_change_hash():
     assert hash_position(_new_position(native_key="1")) == hash_position(_new_position(native_key="2"))
 
 
+def test_last_price_is_stale_flag_changes_hash():
+    """Slice 9: stale flag must be in the hash so the SSE delta layer emits
+    when a row goes stale (during the reconnect window) and again when a
+    real tick clears the flag. Without this, the ⚠️ badge would only show
+    on the next price tick by coincidence, defeating the visual."""
+    from app.core.live_positions import hash_position
+
+    assert hash_position(_new_position(last_price_is_stale=False)) != hash_position(
+        _new_position(last_price_is_stale=True)
+    )
+
+
 def test_hash_is_short_string():
     """Used in per-client memory dicts; should be a small, stable string."""
     from app.core.live_positions import hash_position
