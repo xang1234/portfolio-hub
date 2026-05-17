@@ -110,6 +110,51 @@ def _compute_totals(positions: list[Position]) -> dict:
     }
 
 
+def _render_rows_for_filter(
+    positions: list[Position],
+    active_account: str = "All",
+    *,
+    templates_env=None,
+) -> str:
+    """Render <tr> rows for the SSE payload, filtered by account.
+
+    Live ticks must respect the same ?account= filter the initial
+    page-load used — otherwise the first SSE event would overwrite a
+    filtered tbody with every account's rows. `active_account` is also
+    passed into the partial context so the per-row account pill is
+    suppressed under a specific-account filter (the pill is redundant
+    information when the user has already drilled down).
+
+    `templates_env` is optional; tests omit it and a fresh Jinja2
+    environment is built from `app/templates/`. The production app
+    reuses its own `templates.env` (registered globals included).
+    """
+    from jinja2 import Environment, FileSystemLoader
+
+    from app.core.symbols import flag_for_currency, flag_for_exchange
+
+    if active_account and active_account != "All":
+        positions = [p for p in positions if p.account_id == active_account]
+    if not positions:
+        return ""
+    if templates_env is None:
+        templates_env = Environment(
+            loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True,
+        )
+        templates_env.globals["flag_for_exchange"] = flag_for_exchange
+        templates_env.globals["flag_for_currency"] = flag_for_currency
+    template = templates_env.get_template("partials/holdings_row.html")
+    return "".join(
+        template.render({
+            "position": p,
+            "flag_for_exchange": flag_for_exchange,
+            "market_by_ib": {},
+            "active_account": active_account or "All",
+        })
+        for p in positions
+    )
+
+
 def create_app(
     *,
     broker: Broker | None = None,
@@ -204,20 +249,10 @@ def create_app(
     templates.env.globals["flag_for_currency"] = flag_for_currency
 
     def render_rows(positions: list[Position]) -> str:
-        if not positions:
-            return ""
-        template = templates.get_template("partials/holdings_row.html")
-        # SSE deltas don't currently re-evaluate market state per-tick;
-        # the lunch-subtext stays whatever the initial page-load showed
-        # until the next full refresh. An empty mapping is harmless —
-        # the template guards on it.
-        return "".join(
-            template.render({
-                "position": p,
-                "flag_for_exchange": flag_for_exchange,
-                "market_by_ib": {},
-            })
-            for p in positions
+        """Legacy unfiltered renderer — preserved for callers that
+        pre-date the per-account filter."""
+        return _render_rows_for_filter(
+            positions, active_account="All", templates_env=templates.env,
         )
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -257,19 +292,31 @@ def create_app(
         )
 
     @app.get("/stream/holdings")
-    async def stream_holdings(request: Request):
+    async def stream_holdings(request: Request, account: str | None = None):
         """SSE endpoint streaming row-level deltas of the current portfolio.
 
-        The HTMX SSE extension on the client connects via `sse-connect` and
-        listens for named events: 'snapshot' (initial full tbody on connect)
-        and 'positions' (delta — only changed rows, with hx-swap-oob).
+        Honors the same ?account= filter the index route does so the
+        first SSE event after page load can't overwrite a filtered
+        tbody with every-account rows. Unknown / empty values resolve
+        to "All".
+
+        The HTMX SSE extension on the client connects via `sse-connect`
+        and listens for named events: 'snapshot' (initial full tbody on
+        connect) and 'positions' (delta — only changed rows).
         """
         live = request.app.state.live_positions
-        generator = stream_events(live, render_rows)
+        active_account = account or "All"
+
+        def filtered_render(positions: list[Position]) -> str:
+            return _render_rows_for_filter(
+                positions, active_account=active_account, templates_env=templates.env,
+            )
+
+        generator = stream_events(live, filtered_render)
         return EventSourceResponse(generator)
 
     @app.get("/", response_class=HTMLResponse)
-    async def index(request: Request):
+    async def index(request: Request, account: str | None = None):
         broker = request.app.state.broker
         live = request.app.state.live_positions
         conn_state = await broker.get_connection_state()
@@ -283,23 +330,48 @@ def create_app(
                 positions = await broker.get_positions()
             except NotImplementedError:
                 positions = []
-        positions.sort(key=lambda p: p.market_value_native, reverse=True)
-        totals = _compute_totals(positions)
+
+        # Fetch account summaries up-front so the filter chips and any
+        # per-account summary line have the data they need.
+        try:
+            account_summaries = await broker.get_account_summary()
+        except NotImplementedError:
+            account_summaries = []
+        known_accounts = {s.account_id for s in account_summaries} | {
+            p.account_id for p in positions
+        }
+
+        # Resolve the active account filter. None / "All" / unknown → All.
+        active_account = account
+        if active_account in (None, "", "All") or active_account not in known_accounts:
+            active_account = "All"
+            shown_positions = positions
+        else:
+            shown_positions = [p for p in positions if p.account_id == active_account]
+
+        shown_positions = sorted(
+            shown_positions, key=lambda p: p.market_value_native, reverse=True,
+        )
+        totals = _compute_totals(shown_positions)
+        # Market panel uses all visible exchanges; under a filter that's
+        # the filtered set, otherwise everything.
         markets, market_flag, market_by_ib = _markets_from_positions(
-            positions, market_hours,
+            shown_positions, market_hours,
         )
         return templates.TemplateResponse(
             request=request,
             name="index.html",
             context={
                 "state": state,
-                "positions": positions,
+                "positions": shown_positions,
                 "totals": totals,
                 "markets": markets,
                 "market_flag": market_flag,
                 "market_state_emoji": STATE_EMOJI,
                 "market_by_ib": market_by_ib,
                 "drawer_open": False,
+                "account_summaries": account_summaries,
+                "active_account": active_account,
             },
         )
 

@@ -13,6 +13,31 @@
     </div>
     {% endif %}
 </div>
+{% if account_summaries and account_summaries|length > 1 %}
+<nav class="account-chips" aria-label="Filter by account">
+    <a class="account-chip{% if active_account == 'All' %} account-chip--active{% endif %}"
+       href="/?account=All"
+       hx-get="/?account=All" hx-push-url="true" hx-target="body" hx-swap="outerHTML"
+       {% if active_account == 'All' %}aria-current="page"{% endif %}>All</a>
+    {% for s in account_summaries %}
+    <a class="account-chip{% if active_account == s.account_id %} account-chip--active{% endif %}"
+       href="/?account={{ s.account_id }}"
+       hx-get="/?account={{ s.account_id }}" hx-push-url="true" hx-target="body" hx-swap="outerHTML"
+       {% if active_account == s.account_id %}aria-current="page"{% endif %}>{{ s.account_id }}</a>
+    {% endfor %}
+</nav>
+{% endif %}
+{% if active_account and active_account != 'All' %}
+{% set selected = (account_summaries | selectattr('account_id', 'equalto', active_account) | list | first) %}
+{% if selected %}
+<p class="account-summary" aria-label="Active account summary">
+    Account <strong>{{ selected.account_id }}</strong>
+    · NLV ${{ "{:,.0f}".format(selected.net_liquidation_usd) }}
+    · Cash ${{ "{:,.0f}".format(selected.cash_usd) }}
+    · BP ${{ "{:,.0f}".format(selected.buying_power_usd) }}
+</p>
+{% endif %}
+{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -45,7 +70,7 @@
     </thead>
     <tbody id="positions-tbody"
            hx-ext="sse"
-           sse-connect="/stream/holdings"
+           sse-connect="/stream/holdings{% if active_account and active_account != 'All' %}?account={{ active_account }}{% endif %}"
            sse-swap="snapshot,positions">
         {% for position in positions %}
         {% include "partials/holdings_row.html" %}
