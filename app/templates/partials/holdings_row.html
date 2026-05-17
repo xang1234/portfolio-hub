@@ -14,7 +14,6 @@
     data-canonical-symbol="{{ position.canonical_symbol }}"
     data-name-en="{{ position.name_en }}"
     data-asset-class="{{ position.asset_class }}"
-    @contextmenu.prevent="$dispatch('row-detail', $el.dataset)"
     data-row-detail>
     <td class="col-name">
         {% if position.asset_class == 'CASH' %}

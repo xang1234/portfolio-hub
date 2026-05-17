@@ -131,20 +131,45 @@ def _enabled_brokers() -> frozenset[str]:
     return frozenset(out) or frozenset({"IBKR"})
 
 
+def _apply_filters(
+    positions: list[Position],
+    *,
+    active_account: str = "All",
+    active_asset: str = "All",
+    active_broker: str = "All",
+) -> list[Position]:
+    """Apply the three filter dimensions in turn. Returns a new list.
+
+    Hoisted out of the route so the SSE renderer can reuse it — sharing
+    one filter implementation prevents a live tick from reintroducing
+    rows the user just filtered out.
+    """
+    out = positions
+    if active_account and active_account != "All":
+        out = [p for p in out if p.account_id == active_account]
+    if active_asset and active_asset != "All":
+        out = [p for p in out if p.asset_class == active_asset]
+    if active_broker and active_broker != "All":
+        out = [p for p in out if p.broker == active_broker]
+    return out
+
+
 def _render_rows_for_filter(
     positions: list[Position],
     active_account: str = "All",
     *,
+    active_asset: str = "All",
+    active_broker: str = "All",
     templates_env=None,
 ) -> str:
-    """Render <tr> rows for the SSE payload, filtered by account.
+    """Render <tr> rows for the SSE payload, filtered by all dimensions.
 
-    Live ticks must respect the same ?account= filter the initial
-    page-load used — otherwise the first SSE event would overwrite a
-    filtered tbody with every account's rows. `active_account` is also
-    passed into the partial context so the per-row account pill is
-    suppressed under a specific-account filter (the pill is redundant
-    information when the user has already drilled down).
+    Live ticks must respect the same ?account= / ?asset= / ?broker=
+    filters the initial page-load used — otherwise the first SSE event
+    would overwrite a filtered tbody with the unfiltered set.
+    `active_account` is also passed into the partial context so the
+    per-row account pill is suppressed under a specific-account filter
+    (the pill is redundant when the user has already drilled down).
 
     `templates_env` is optional; tests omit it and a fresh Jinja2
     environment is built from `app/templates/`. The production app
@@ -154,8 +179,12 @@ def _render_rows_for_filter(
 
     from app.core.symbols import flag_for_currency, flag_for_exchange
 
-    if active_account and active_account != "All":
-        positions = [p for p in positions if p.account_id == active_account]
+    positions = _apply_filters(
+        positions,
+        active_account=active_account,
+        active_asset=active_asset,
+        active_broker=active_broker,
+    )
     if not positions:
         return ""
     if templates_env is None:
@@ -313,13 +342,18 @@ def create_app(
         )
 
     @app.get("/stream/holdings")
-    async def stream_holdings(request: Request, account: str | None = None):
+    async def stream_holdings(
+        request: Request,
+        account: str | None = None,
+        asset: str | None = None,
+        broker: str | None = None,
+    ):
         """SSE endpoint streaming row-level deltas of the current portfolio.
 
-        Honors the same ?account= filter the index route does so the
-        first SSE event after page load can't overwrite a filtered
-        tbody with every-account rows. Unknown / empty values resolve
-        to "All".
+        Honors the same ?account= / ?asset= / ?broker= filters the
+        index route does so the first SSE event after page load can't
+        overwrite a filtered tbody with unfiltered rows. Unknown /
+        empty values resolve to "All".
 
         The HTMX SSE extension on the client connects via `sse-connect`
         and listens for named events: 'snapshot' (initial full tbody on
@@ -327,10 +361,16 @@ def create_app(
         """
         live = request.app.state.live_positions
         active_account = account or "All"
+        active_asset = asset or "All"
+        active_broker = broker or "All"
 
         def filtered_render(positions: list[Position]) -> str:
             return _render_rows_for_filter(
-                positions, active_account=active_account, templates_env=templates.env,
+                positions,
+                active_account=active_account,
+                active_asset=active_asset,
+                active_broker=active_broker,
+                templates_env=templates.env,
             )
 
         generator = stream_events(live, filtered_render)

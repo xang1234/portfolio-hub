@@ -165,9 +165,13 @@
             </th>
         </tr>
     </thead>
+    {%- set sse_qs = [] -%}
+    {%- if active_account and active_account != 'All' %}{{ sse_qs.append('account=' ~ active_account) or '' }}{% endif -%}
+    {%- if active_asset and active_asset != 'All' %}{{ sse_qs.append('asset=' ~ active_asset) or '' }}{% endif -%}
+    {%- if active_broker and active_broker != 'All' %}{{ sse_qs.append('broker=' ~ active_broker) or '' }}{% endif -%}
     <tbody id="positions-tbody"
            hx-ext="sse"
-           sse-connect="/stream/holdings{% if active_account and active_account != 'All' %}?account={{ active_account }}{% endif %}"
+           sse-connect="/stream/holdings{% if sse_qs %}?{{ sse_qs|join('&') }}{% endif %}"
            sse-swap="snapshot,positions">
         {% for position in positions %}
         {% include "partials/holdings_row.html" %}

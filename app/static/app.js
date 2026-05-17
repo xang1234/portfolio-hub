@@ -7,6 +7,28 @@
 (function () {
     'use strict';
 
+    // ──────────────────────────────────────────────────────────────────
+    // Top-of-IIFE `const`s. JavaScript hoists `const` declarations but
+    // throws (TDZ) on access before initialization, so anything used
+    // by a function that may run during IIFE setup must be declared
+    // here — NOT at the point where the feature block begins.
+    // ──────────────────────────────────────────────────────────────────
+
+    // Drawer + sort persistence (localStorage keys)
+    const DRAWER_KEY = 'portfolio-hub.drawer';
+    const SORT_KEY = 'portfolio-hub.sort';
+    const DEFAULT_SORT = { key: 'mv_usd', dir: 'desc' };
+
+    // Pull-to-refresh threshold (px) — ≥ 50 by review rule so casual
+    // scroll-bounce doesn't trigger a reload.
+    const PULL_REFRESH_THRESHOLD = 70;
+    let pullStartY = null;
+    let pullDelta = 0;
+
+    // Long-press threshold (ms)
+    const LONG_PRESS_MS = 500;
+    let longPressTimer = null;
+
     function formatDelta(ms) {
         if (!Number.isFinite(ms)) return '';
         if (ms <= 0) return '· now';
@@ -36,8 +58,8 @@
 
     // Plan default: collapsed on portrait/narrow, expanded on desktop.
     // localStorage override wins so a returning user lands in their
-    // last explicit state regardless of orientation.
-    const DRAWER_KEY = 'portfolio-hub.drawer';
+    // last explicit state regardless of orientation. (DRAWER_KEY
+    // declared at the top of the IIFE — see TDZ note.)
 
     function syncDrawerDefault() {
         const drawer = document.querySelector('.market-drawer');
@@ -76,9 +98,8 @@
     // requests a fresh snapshot). Threshold ≥ 50px so scroll-bounce
     // doesn't accidentally trigger.
 
-    const PULL_REFRESH_THRESHOLD = 70;
-    let pullStartY = null;
-    let pullDelta = 0;
+    // (PULL_REFRESH_THRESHOLD + pullStartY + pullDelta declared at the
+    // top of the IIFE — see TDZ note.)
 
     function setPullIndicator(label, visible) {
         const el = document.querySelector('[data-pull-indicator]');
@@ -147,17 +168,44 @@
         });
     }
 
+    function resetTimestampsToNow() {
+        // Called on every SSE / HTMX swap so "Updated 0:02 ago" reflects
+        // the freshness of the latest event, not the initial page-load
+        // time. The header strip lives outside the SSE swap surface,
+        // so without this the timestamp would creep up forever even as
+        // ticks flowed in.
+        const iso = new Date().toISOString();
+        document.querySelectorAll('[data-updated-at]').forEach(el => {
+            el.setAttribute('data-updated-at', iso);
+        });
+        tickTimestamps();
+    }
+
     setInterval(tickTimestamps, 5_000);
 
     // Long-press handler — dispatches the same row-detail event the
     // Alpine.js contextmenu handler fires, so desktop right-click and
     // mobile touch-hold share one code path.
-    const LONG_PRESS_MS = 500;
-    let longPressTimer = null;
+    // (LONG_PRESS_MS + longPressTimer declared at the top of the IIFE
+    // — see TDZ note.)
 
     function clearLongPress() {
         if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
     }
+
+    // Right-click on a row dispatches the same row-detail event Alpine
+    // listens for. Delegated at the document level so SSE-swapped rows
+    // are covered automatically — Alpine 3 doesn't auto-init swapped
+    // DOM, so an inline @contextmenu binding would silently break the
+    // moment the first SSE tick replaces a row.
+    document.addEventListener('contextmenu', function (e) {
+        const tr = e.target && e.target.closest && e.target.closest('[data-row-detail]');
+        if (!tr) return;
+        e.preventDefault();
+        tr.dispatchEvent(new CustomEvent('row-detail', {
+            detail: { ...tr.dataset }, bubbles: true,
+        }));
+    });
 
     function attachLongPressHandlers() {
         document.querySelectorAll('[data-row-detail]').forEach(tr => {
@@ -199,8 +247,8 @@
     // 'portfolio-hub.sort'. Pure DOM reorder; sort comparison reads
     // data-<key> attributes off each <tr> (numeric).
 
-    const SORT_KEY = 'portfolio-hub.sort';
-    const DEFAULT_SORT = { key: 'mv_usd', dir: 'desc' };
+    // (SORT_KEY + DEFAULT_SORT declared at the top of the IIFE — see
+    // TDZ note.)
 
     function loadSort() {
         try {
@@ -291,10 +339,16 @@
     // cards get a countdown immediately. Attach to `document` (not body)
     // because the body itself may be the swap target — a body-scoped
     // listener disappears with the old body element.
-    document.addEventListener('htmx:afterSwap', function () {
+    function postSwapRehydrate() {
         tick();
         attachDrawerHandlers();
         initSort();
         attachLongPressHandlers();
-    });
+        resetTimestampsToNow();
+    }
+
+    document.addEventListener('htmx:afterSwap', postSwapRehydrate);
+    // htmx-ext-sse fires a separate event on incoming SSE messages.
+    // Hook it so SSE-only ticks also refresh the "Updated 0:02 ago".
+    document.addEventListener('htmx:sseMessage', resetTimestampsToNow);
 })();

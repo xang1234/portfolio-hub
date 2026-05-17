@@ -121,9 +121,17 @@ def test_row_wired_with_long_press_handler():
 
 
 def test_app_js_implements_long_press_and_right_click():
+    """Strict check: the JS must register an actual `contextmenu` and
+    `touchstart` listener, not just mention them in a comment. The
+    pre-fix version of this test passed against an Alpine-only binding
+    that lived in the template and never executed JS code; that bug
+    would have shipped if we'd trusted the keyword match."""
     from pathlib import Path
     js = (Path("app/static") / "app.js").read_text()
 
-    # Right-click → contextmenu event; long-press → touchstart + setTimeout
-    assert "contextmenu" in js
-    assert "touchstart" in js
+    # Right-click: must register a real listener on the document
+    assert "addEventListener('contextmenu'" in js \
+        or 'addEventListener("contextmenu"' in js
+    # Long-press: must register a real touchstart listener
+    assert "addEventListener('touchstart'" in js \
+        or 'addEventListener("touchstart"' in js
