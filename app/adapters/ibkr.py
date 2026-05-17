@@ -91,6 +91,13 @@ class IbkrAdapter:
         self._streaming: dict[int, tuple[Position, object, object]] = {}
         self._connection_state: ConnectionState = ConnectionState.DISCONNECTED
         self._reconnect_task: asyncio.Task | None = None
+        # Hooks invoked once per successful reconnect (see on_reconnected).
+        # Each callback gets the fresh IB instance as its only argument.
+        self._reconnect_hooks: list[Callable[[object], None]] = []
+        # Current step in the backoff schedule while RECONNECTING; None when
+        # the loop isn't sleeping a delay. Surfaced via current_backoff_delay()
+        # so the badge can render "reconnecting (5s)" / "(15s)" / "(60s)".
+        self._current_backoff_delay: float | None = None
 
     # ---- lifecycle (slice 1) -------------------------------------------------
 
@@ -485,18 +492,72 @@ class IbkrAdapter:
 
     # ---- reconnect (slice 9) ------------------------------------------------
 
+    def current_backoff_delay(self) -> float | None:
+        """Return the backoff window the reconnect loop is currently sleeping,
+        or None when not actively waiting for a retry. Drives the badge text
+        "🟡 IBKR reconnecting (5s)" → "(15s)" → "(60s)" as the loop progresses.
+        """
+        return self._current_backoff_delay
+
+    def on_reconnected(self, callback: Callable[[object], None]) -> None:
+        """Register a callback fired once after each successful auto-reconnect.
+
+        Used by features that hook IB events (slice 11's execDetailsEvent for
+        fills) — the original handlers die with the dead IB session, so they
+        need re-registering on the fresh one. The callback receives the new
+        IB instance as its only argument.
+
+        Registration is idempotent: passing the same callable twice keeps it
+        in the list once, so features registering both at startup and on
+        config reload don't get double-fired.
+        """
+        if callback in self._reconnect_hooks:
+            return
+        self._reconnect_hooks.append(callback)
+
+    def _fire_reconnect_hooks(self) -> None:
+        """Invoke every registered hook with the live IB instance.
+
+        One bad hook must not block the others — log and continue. The
+        reconnect itself is still considered successful even if hooks raise.
+        """
+        ib = self._ib
+        for hook in list(self._reconnect_hooks):
+            try:
+                hook(ib)
+            except Exception as exc:
+                _LOG.warning("Reconnect hook %r raised: %s", hook, exc)
+
     def _handle_disconnect(self) -> None:
         """Called by ib_async when the TCP connection drops.
 
         Transitions immediately to RECONNECTING and spawns the reconnect loop.
+        Also marks every Position in live_positions stale so the renderer can
+        show ⚠️/dim until the next real tick replaces them.
         Idempotent — if we're already reconnecting, leaves the existing task alone.
         """
         if self._connection_state == ConnectionState.RECONNECTING:
             return
         self._connection_state = ConnectionState.RECONNECTING
         _LOG.warning("Gateway disconnected; entering RECONNECTING state")
+        self._mark_live_positions_stale()
         if self._reconnect_task is None or self._reconnect_task.done():
             self._reconnect_task = asyncio.create_task(self._reconnect_loop())
+
+    def _mark_live_positions_stale(self) -> None:
+        """Flip last_price_is_stale=True on every currently-known Position.
+
+        Done synchronously inside the disconnectedEvent handler so the very
+        next render (status badge swap, SSE delta from a pending tick that
+        races us, etc.) sees the stale flag set. The flag clears naturally
+        on the next live tick — see _on_ticker_update.
+        """
+        if self._live_positions is None:
+            return
+        for old in self._live_positions.get_all():
+            if old.last_price_is_stale:
+                continue
+            self._live_positions.set_position(replace(old, last_price_is_stale=True))
 
     async def _reconnect_loop(self) -> None:
         """Retry connect() with the configured backoff schedule until success.
@@ -507,7 +568,11 @@ class IbkrAdapter:
         """
         try:
             for attempt, delay in enumerate(self._reconnect_delays, start=1):
-                _LOG.info("Reconnect attempt %d will fire in %.1fs", attempt, delay)
+                _LOG.info(
+                    "Reconnect attempt %d will fire in %.1fs (next delay: %.1fs)",
+                    attempt, delay, delay,
+                )
+                self._current_backoff_delay = delay
                 await asyncio.sleep(delay)
                 if self._connection_state == ConnectionState.CONNECTED:
                     # Something else reconnected us (manual connect()), stop.
@@ -518,6 +583,8 @@ class IbkrAdapter:
                     self._streaming.clear()
                     await self.connect()
                     _LOG.info("Reconnect attempt %d succeeded", attempt)
+                    self._current_backoff_delay = None
+                    self._fire_reconnect_hooks()
                     return
                 except asyncio.CancelledError:
                     raise
@@ -526,8 +593,10 @@ class IbkrAdapter:
                     continue
             _LOG.error("Backoff exhausted after %d attempts; staying DISCONNECTED", len(self._reconnect_delays))
             self._connection_state = ConnectionState.DISCONNECTED
+            self._current_backoff_delay = None
         except asyncio.CancelledError:
             _LOG.info("Reconnect loop cancelled")
+            self._current_backoff_delay = None
             raise
 
     # ---- streaming (slice 4) ------------------------------------------------
@@ -630,6 +699,7 @@ class IbkrAdapter:
             fx_is_fallback=conv.fx_is_fallback,
             fx_unavailable=conv.fx_unavailable,
             last_price_is_previous_close=False,
+            last_price_is_stale=False,
         )
         self._streaming[conid] = (new_position, contract, ticker)
         self._live_positions.set_position(new_position)

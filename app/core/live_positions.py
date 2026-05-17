@@ -87,7 +87,8 @@ def hash_position(p: Position) -> str:
         f"{p.market_value_native}|"
         f"{p.market_value_usd}|"
         f"{p.unrealized_pnl_native}|"
-        f"{p.unrealized_pnl_usd}"
+        f"{p.unrealized_pnl_usd}|"
+        f"{int(p.last_price_is_stale)}"
     )
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
 

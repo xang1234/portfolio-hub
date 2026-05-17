@@ -50,6 +50,10 @@ class Position:
     # reqHistoricalData (daily-bar close). Template renders a "prev close"
     # subtext so users know the number isn't ticking live.
     last_price_is_previous_close: bool = False
+    # Set during the reconnect window (broker dropped, last tick is from
+    # before the disconnect). Row template renders ⚠️ + reduced opacity.
+    # Naturally clears when the next live tick replaces the Position.
+    last_price_is_stale: bool = False
     # IB's price-unit divisor. For most contracts = 1. For pence-quoted UK
     # equities (e.g. IQE on LSE) = 100: IB returns last/avgCost in pence,
     # so we divide by 100 to compute mv_native/pnl_native in pounds.

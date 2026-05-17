@@ -1,5 +1,5 @@
 <tr id="row-{{ position.broker }}-{{ position.account_id }}-{{ position.canonical_symbol }}"
-    class="position-row{% if position.asset_class == 'CASH' %} position-row--cash{% endif %}"
+    class="position-row{% if position.asset_class == 'CASH' %} position-row--cash{% endif %}{% if position.last_price_is_stale %} position-row--stale{% endif %}"
     data-quantity="{{ position.quantity }}"
     data-last-price="{{ position.last_price }}"
     data-mv-native="{{ position.market_value_native }}"
@@ -53,6 +53,9 @@
             {% endif %}
             {% if position.last_price_is_previous_close %}
                 <small class="prev-close-note" title="No live market data; showing previous close">prev close</small>
+            {% endif %}
+            {% if position.last_price_is_stale %}
+                <span class="price-stale-badge" title="Broker reconnecting — price hasn't ticked since the disconnect">⚠️</span>
             {% endif %}
         {% else %}—{% endif %}
     </td>

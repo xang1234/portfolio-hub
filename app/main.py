@@ -309,13 +309,18 @@ def create_app(
 
     @app.get("/healthz")
     async def healthz(request: Request):
-        conn_state = await request.app.state.broker.get_connection_state()
+        broker_ref = request.app.state.broker
+        conn_state = await broker_ref.get_connection_state()
         state = _state_to_string(conn_state)
         if _is_htmx_request(request):
+            # Only the IBKR adapter exposes current_backoff_delay() today —
+            # other adapters can opt in by implementing the same shape.
+            delay_getter = getattr(broker_ref, "current_backoff_delay", None)
+            backoff_delay = delay_getter() if callable(delay_getter) else None
             return templates.TemplateResponse(
                 request=request,
                 name="partials/status_badge.html",
-                context={"state": state},
+                context={"state": state, "backoff_delay": backoff_delay},
             )
         return JSONResponse({"ibkr": state})
 
@@ -335,10 +340,15 @@ def create_app(
             if callable(start):
                 await start()
             conn_state = await broker.get_connection_state()
+        delay_getter = getattr(broker, "current_backoff_delay", None)
+        backoff_delay = delay_getter() if callable(delay_getter) else None
         return templates.TemplateResponse(
             request=request,
             name="partials/status_badge.html",
-            context={"state": _state_to_string(conn_state)},
+            context={
+                "state": _state_to_string(conn_state),
+                "backoff_delay": backoff_delay,
+            },
         )
 
     @app.get("/stream/holdings")
@@ -390,6 +400,8 @@ def create_app(
         live = request.app.state.live_positions
         conn_state = await broker.get_connection_state()
         state = _state_to_string(conn_state)
+        delay_getter = getattr(broker, "current_backoff_delay", None)
+        backoff_delay = delay_getter() if callable(delay_getter) else None
         # Prefer the live, tick-updated snapshot when it has data; otherwise
         # fall back to a direct broker.get_positions() fetch (covers the slice
         # 1/2 test path where live_positions is never seeded).
@@ -450,6 +462,7 @@ def create_app(
             name="index.html",
             context={
                 "state": state,
+                "backoff_delay": backoff_delay,
                 "positions": shown_positions,
                 "totals": totals,
                 "markets": markets,
