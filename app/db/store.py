@@ -234,3 +234,84 @@ class Store:
             }
             for r in rows
         ]
+
+    # ---- equity_snapshots (slice 10) ---------------------------------------
+
+    async def insert_equity_snapshot(
+        self,
+        *,
+        snapshot_at: datetime,
+        snapshot_session: str,
+        broker: str,
+        account_id: str,
+        base_currency: str,
+        net_liquidation_native: float,
+        net_liquidation_usd: float,
+        gross_position_value_usd: float,
+        cash_usd: float,
+    ) -> bool:
+        """INSERT OR IGNORE an equity snapshot row. Returns True if a new row
+        was written, False on PK collision.
+
+        Idempotent on (snapshot_at, snapshot_session, broker, account_id) so
+        the scheduler and manual /admin/snapshot trigger can race without
+        duplicating. snapshot_session disambiguates two exchange-close
+        snapshots that resolve to the same UTC instant.
+        """
+        conn = await self._connection()
+        cursor = await conn.execute(
+            """
+            INSERT OR IGNORE INTO equity_snapshots(
+                snapshot_at, snapshot_session, broker, account_id,
+                base_currency, net_liquidation_native, net_liquidation_usd,
+                gross_position_value_usd, cash_usd, captured_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot_at.isoformat(), snapshot_session, broker, account_id,
+                base_currency,
+                float(net_liquidation_native), float(net_liquidation_usd),
+                float(gross_position_value_usd), float(cash_usd),
+                _utcnow().isoformat(),
+            ),
+        )
+        await conn.commit()
+        return cursor.rowcount > 0
+
+    async def get_equity_snapshots_since(
+        self,
+        *,
+        broker: str,
+        account_id: str,
+        since: datetime,
+    ) -> list[dict]:
+        """Return equity snapshots for (broker, account_id) at or after
+        `since`, oldest first."""
+        conn = await self._connection()
+        async with conn.execute(
+            """
+            SELECT snapshot_at, snapshot_session, broker, account_id,
+                   base_currency, net_liquidation_native, net_liquidation_usd,
+                   gross_position_value_usd, cash_usd, captured_at
+            FROM equity_snapshots
+            WHERE broker = ? AND account_id = ? AND snapshot_at >= ?
+            ORDER BY snapshot_at ASC
+            """,
+            (broker, account_id, since.isoformat()),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [
+            {
+                "snapshot_at": datetime.fromisoformat(r[0]),
+                "snapshot_session": r[1],
+                "broker": r[2],
+                "account_id": r[3],
+                "base_currency": r[4],
+                "net_liquidation_native": r[5],
+                "net_liquidation_usd": r[6],
+                "gross_position_value_usd": r[7],
+                "cash_usd": r[8],
+                "captured_at": datetime.fromisoformat(r[9]),
+            }
+            for r in rows
+        ]

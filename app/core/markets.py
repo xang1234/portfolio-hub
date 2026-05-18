@@ -215,6 +215,41 @@ class MarketHours:
             return None
         return future.iloc[0]["open"].to_pydatetime()
 
+    def next_close_at(self, ib_exchange: str) -> datetime | None:
+        """Return the UTC moment of the next regular-session close strictly
+        after `now`, or None for unmapped exchanges.
+
+        Used by the slice 10 equity-snapshot scheduler. Half-days return the
+        early close (exchange_calendars handles this); holidays skip to the
+        next trading day. Strictly-future semantic so a scheduler firing at
+        the close instant doesn't snapshot the same close twice.
+        """
+        mic = mic_for_ib_exchange(ib_exchange)
+        if mic is None:
+            return None
+        cal = self._calendar(mic)
+        now = self._clock()
+
+        import pandas as pd
+
+        # Search a generous window — even multi-week holiday stretches
+        # (Lunar New Year, Golden Week) fit. Use the exchange-local date
+        # to start so we don't miss a session that opens just before UTC
+        # midnight (e.g. ASX during AEDT).
+        local_now = now.astimezone(cal.tz)
+        start_date = pd.Timestamp(local_now.date())
+        end_date = start_date + pd.Timedelta(days=21)
+        try:
+            window = cal.schedule.loc[start_date:end_date]
+        except (KeyError, ValueError):
+            return None
+
+        for _, row in window.iterrows():
+            close = row["close"].to_pydatetime()
+            if close > now:
+                return close
+        return None
+
     def status(self, ib_exchange: str) -> MarketStatus | None:
         """Return current MarketStatus for the given IB exchange code,
         or None if the venue isn't mapped (caller skips the row)."""
