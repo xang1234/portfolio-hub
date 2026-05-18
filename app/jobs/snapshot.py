@@ -27,7 +27,8 @@ from app.db.store import Store
 
 _LOG = logging.getLogger(__name__)
 
-_DEFAULT_EMPTY_RECHECK = 5 * 60  # seconds
+_DEFAULT_EMPTY_RECHECK = 5 * 60  # seconds — base interval when no STK held
+_EMPTY_RECHECK_CAP = 60 * 60     # seconds — backoff cap (1 hour)
 
 
 async def _capture_snapshot(
@@ -97,6 +98,11 @@ async def scheduled_snapshot_loop(
     repeat. Handles empty-portfolio / unmapped-exchange edge cases without
     crashing, and survives a single capture failure.
     """
+    # Exponential backoff for the empty-portfolio path. A cash-only account
+    # would otherwise poll get_positions() forever at empty_recheck_interval;
+    # capping at 1h keeps log noise bounded for accounts that never trade.
+    # Reset to the base interval as soon as a capture fires.
+    empty_delay = empty_recheck_interval
     while True:
         try:
             positions = await adapter.get_positions()
@@ -108,7 +114,8 @@ async def scheduled_snapshot_loop(
         if target is None:
             # No STK holdings OR no mapped venue. Re-check later instead of
             # spinning or crashing — operator may add positions any time.
-            await sleep(empty_recheck_interval)
+            await sleep(empty_delay)
+            empty_delay = min(empty_delay * 2, _EMPTY_RECHECK_CAP)
             continue
 
         ib_ex, close_at = target
@@ -120,13 +127,15 @@ async def scheduled_snapshot_loop(
         )
         await sleep(delay)
 
-        try:
-            await capture(adapter, store, ib_ex, close_at)
-        except Exception as exc:
-            # Defensive — capture() already handles its own exceptions, but
-            # any future refactor that lets one bubble up shouldn't kill the
-            # daily schedule.
-            _LOG.warning("snapshot capture raised at %s_CLOSE: %s", ib_ex, exc)
+        # `_capture_snapshot` already catches its own exceptions per-account,
+        # so this call should not raise under normal operation. Letting a
+        # genuine programming bug bubble up surfaces it via the lifespan's
+        # `add_done_callback` instead of being silently logged-and-retried
+        # forever — easier to diagnose than a steady-state warning stream.
+        await capture(adapter, store, ib_ex, close_at)
+        # A successful capture means positions exist again — reset the
+        # empty-portfolio backoff so the next empty stretch starts at base.
+        empty_delay = empty_recheck_interval
 
         # Belt-and-suspenders: tick past the close moment so the next
         # iteration's next_close_at returns the NEXT session, not this one.

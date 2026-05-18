@@ -196,6 +196,94 @@ async def test_scheduler_sleeps_when_no_exchanges_held(store):
     assert rows == []
 
 
+async def test_empty_portfolio_recheck_backs_off_exponentially(store):
+    """A cash-only account would otherwise poll get_positions() every 60s
+    forever. Back off exponentially (60 → 120 → 240 → … cap 3600) so the
+    log noise stays bounded and we're not hammering the broker."""
+    from app.jobs.snapshot import scheduled_snapshot_loop
+
+    adapter = _FakeAdapter(positions=[], summaries=[_summary()])
+    hours = _StaticMarketHours({})
+    sleeps = []
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) >= 8:
+            raise asyncio.CancelledError()
+    try:
+        await scheduled_snapshot_loop(
+            adapter, store, hours,
+            sleep=fake_sleep, now=lambda: _utc("2026-05-20T03:00:00+00:00"),
+            empty_recheck_interval=60.0,
+        )
+    except asyncio.CancelledError:
+        pass
+
+    # Doubling each empty round, capped at 3600s (1h). Start 60s.
+    assert sleeps[0] == 60.0
+    assert sleeps[1] == 120.0
+    assert sleeps[2] == 240.0
+    assert sleeps[3] == 480.0
+    assert sleeps[4] == 960.0
+    assert sleeps[5] == 1920.0
+    # Cap hits at 3600s — clamp here and stay.
+    assert sleeps[6] == 3600.0
+    assert sleeps[7] == 3600.0
+
+
+async def test_empty_recheck_backoff_resets_when_positions_appear(store):
+    """As soon as the operator adds a position (held exchange resolves),
+    the backoff counter must reset so the next empty stretch starts at
+    the configured base again."""
+    from app.jobs.snapshot import scheduled_snapshot_loop
+
+    # Three iterations: empty → empty → not-empty → empty → empty.
+    # We need an adapter whose held-positions list changes between calls.
+    class _SequenceAdapter:
+        name = "IBKR"
+        def __init__(self):
+            self._iter = iter([
+                [], [],
+                [_stk(exchange="NASDAQ")],
+                [], [],
+            ])
+        async def get_positions(self):
+            try: return next(self._iter)
+            except StopIteration: return []
+        async def get_account_summary(self): return [_summary()]
+
+    sleeps = []
+    now_ref = {"t": _utc("2026-05-20T03:00:00+00:00")}
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+        now_ref["t"] = now_ref["t"] + _td(seconds)
+        if len(sleeps) >= 7:
+            raise asyncio.CancelledError()
+
+    hours = _StaticMarketHours({"NASDAQ": _utc("2026-05-20T20:00:00+00:00")})
+    try:
+        await scheduled_snapshot_loop(
+            _SequenceAdapter(), store, hours,
+            sleep=fake_sleep, now=lambda: now_ref["t"],
+            empty_recheck_interval=60.0,
+        )
+    except asyncio.CancelledError:
+        pass
+
+    # empty iter 1: sleeps[0] = 60.0 (base)
+    # empty iter 2: sleeps[1] = 120.0 (backoff x2)
+    # not-empty iter 3: sleeps[2] = delay to close, sleeps[3] = 1.0s tick
+    # empty iter 4: sleeps[4] = 60.0 (RESET after a successful capture)
+    # empty iter 5: sleeps[5] = 120.0
+    # cancel
+    assert sleeps[0] == 60.0
+    assert sleeps[1] == 120.0
+    assert sleeps[3] == 1.0
+    assert sleeps[4] == 60.0, (
+        f"backoff should reset after a successful capture; got sleeps={sleeps}"
+    )
+    assert sleeps[5] == 120.0
+
+
 # Loop survives one snapshot raising -----------------------------------------
 
 
@@ -253,6 +341,56 @@ async def test_scheduler_survives_get_account_summary_raising(store):
     assert adapter.get_summary_calls == 2
     # Loop is still alive when we cancelled — proved by len(sleeps) >= 4.
     assert len(sleeps) >= 4
+
+
+# Integration: real MarketHours wired into the loop ------------------------
+
+
+async def test_scheduler_with_real_market_hours_targets_actual_close(store):
+    """All the other scheduler tests use _StaticMarketHours stubs. This one
+    wires the REAL MarketHours (which reads exchange_calendars) into
+    scheduled_snapshot_loop so a regression in next_close_at or the
+    loop's integration with it would be caught."""
+    from app.core.markets import MarketHours
+    from app.jobs.snapshot import scheduled_snapshot_loop
+
+    # 2026-05-20 (Wed) is a regular NYSE session. From 14:00 UTC (10:00 ET),
+    # the close should be 20:00 UTC (16:00 ET).
+    fixed_now = _utc("2026-05-20T14:00:00+00:00")
+    hours = MarketHours(clock=lambda: fixed_now)
+
+    adapter = _FakeAdapter(
+        positions=[_stk(exchange="NASDAQ")], summaries=[_summary()],
+    )
+    sleeps = []
+    now_ref = {"t": fixed_now}
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+        now_ref["t"] = now_ref["t"] + _td(seconds)
+        if len(sleeps) >= 2:
+            raise asyncio.CancelledError()
+
+    try:
+        await scheduled_snapshot_loop(
+            adapter, store, hours,
+            sleep=fake_sleep, now=lambda: now_ref["t"],
+        )
+    except asyncio.CancelledError:
+        pass
+
+    # 14:00 UTC → 20:00 UTC = 6 hours.
+    assert sleeps[0] == 6 * 3600, (
+        f"real MarketHours should target NYSE 20:00 UTC close = 6h from 14:00; "
+        f"got {sleeps[0]}"
+    )
+
+    rows = await store.get_equity_snapshots_since(
+        broker="IBKR", account_id="U1",
+        since=_utc("2026-05-20T00:00:00+00:00"),
+    )
+    assert len(rows) == 1
+    assert rows[0]["snapshot_session"] == "NASDAQ_CLOSE"
+    assert rows[0]["snapshot_at"] == _utc("2026-05-20T20:00:00+00:00")
 
 
 # Helper ---------------------------------------------------------------------

@@ -112,6 +112,37 @@ async def test_adapter_populates_native_nlv_and_gross_position_value():
     assert s.gross_position_value_usd == pytest.approx(680_000.0 * 0.1283)
 
 
+async def test_adapter_handles_multi_currency_gross_position_value():
+    """IB occasionally reports GrossPositionValue in a currency different
+    from the account's base (multi-currency accounts). The per-tag _to_usd
+    conversion must honor each tag's reported currency independently —
+    NOT assume everything is in base_currency."""
+    from app.adapters.ibkr import IbkrAdapter
+
+    # NLV in USD ($100k), but GPV in HKD (HK$680k ≈ $87k at 0.1283).
+    rows = [
+        _Row("U1", "NetLiquidation",     "100000", "USD"),
+        _Row("U1", "TotalCashValue",     "30000",  "USD"),
+        _Row("U1", "BuyingPower",        "200000", "USD"),
+        _Row("U1", "GrossPositionValue", "680000", "HKD"),
+    ]
+    ib = _FakeIB(rows)
+    adapter = IbkrAdapter(
+        host="ib", port=4003, client_id=1, ib_factory=lambda: ib,
+        fx_service=_FxStub({"HKD": 0.1283}),
+    )
+    adapter._ib = ib
+
+    summaries = await adapter.get_account_summary()
+    assert summaries[0].base_currency == "USD"  # NLV's ccy
+    assert summaries[0].net_liquidation_usd == pytest.approx(100_000.0)
+    # GPV must convert via HKD rate, not pass through as USD.
+    assert summaries[0].gross_position_value_usd == pytest.approx(680_000.0 * 0.1283), (
+        f"GPV reported in HKD must be converted via HKD→USD, got "
+        f"{summaries[0].gross_position_value_usd}"
+    )
+
+
 async def test_adapter_handles_missing_gross_position_value_tag():
     """If IB doesn't return GrossPositionValue (older accounts, perm denied),
     gross_position_value_usd is 0.0 — never None, never raises."""

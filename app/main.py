@@ -16,6 +16,7 @@ from pathlib import Path
 import asyncio
 import logging
 import os
+from typing import Callable
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -24,6 +25,7 @@ from fastapi.templating import Jinja2Templates
 from sse_starlette.sse import EventSourceResponse
 
 from app.core.broker import Broker, ConnectionState, Position
+from app.core.equity import build_equity_snapshot_row
 from app.core.live_positions import LivePositions, stream_events
 from app.core.markets import STATE_EMOJI, MarketHours, MarketStatus
 from app.jobs.fills_reconcile import (
@@ -92,6 +94,20 @@ _STATE_STRINGS = {
 
 def _state_to_string(state: ConnectionState) -> str:
     return _STATE_STRINGS[state]
+
+
+def _log_loop_crash(name: str) -> Callable[[asyncio.Task], None]:
+    """Build a done_callback that surfaces background-loop crashes on the
+    app's logger. Without this, an uncaught exception in a fire-and-forget
+    asyncio task lands on the default asyncio handler — logged under the
+    `asyncio` logger and easy to miss when ops watch only app.*."""
+    def callback(t: asyncio.Task) -> None:
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc is not None:
+            _LOG.error("%s loop crashed: %s", name, exc, exc_info=exc)
+    return callback
 
 
 def _require_admin_token(request: Request) -> None:
@@ -314,38 +330,21 @@ def create_app(
             reconcile_task = asyncio.create_task(
                 scheduled_reconcile_loop(broker, store, at=reconcile_at),
             )
-            # Without an explicit callback, an uncaught loop exception lands
-            # on the asyncio default exception handler — logged under the
-            # 'asyncio' logger but invisible to ops watching only app.*.
-            # Surface it on our logger so a crashed scheduler is noticed.
-            def _on_reconcile_loop_done(t: asyncio.Task) -> None:
-                if t.cancelled():
-                    return
-                exc = t.exception()
-                if exc is not None:
-                    _LOG.error(
-                        "fills reconcile loop crashed: %s", exc, exc_info=exc,
-                    )
-            reconcile_task.add_done_callback(_on_reconcile_loop_done)
+            reconcile_task.add_done_callback(_log_loop_crash("fills reconcile"))
 
             # Spawn the equity-snapshot scheduler. Sleeps until each held
             # exchange's next regular-session close (half-day/holiday-aware
             # via exchange_calendars), captures one row per linked account
             # into equity_snapshots, then loops.
-            from app.core.markets import MarketHours
+            # Reuse the create_app-level MarketHours instance so the scheduler
+            # shares the (lazily-loaded) exchange_calendars cache with the
+            # index route — avoids both duplicate first-call I/O and
+            # divergent calendars on a hot-reload.
             from app.jobs.snapshot import scheduled_snapshot_loop
             snapshot_task = asyncio.create_task(
-                scheduled_snapshot_loop(broker, store, MarketHours()),
+                scheduled_snapshot_loop(broker, store, market_hours),
             )
-            def _on_snapshot_loop_done(t: asyncio.Task) -> None:
-                if t.cancelled():
-                    return
-                exc = t.exception()
-                if exc is not None:
-                    _LOG.error(
-                        "equity snapshot loop crashed: %s", exc, exc_info=exc,
-                    )
-            snapshot_task.add_done_callback(_on_snapshot_loop_done)
+            snapshot_task.add_done_callback(_log_loop_crash("equity snapshot"))
         yield
         if manage_lifecycle:
             for t in (reconcile_task, snapshot_task):
@@ -471,10 +470,6 @@ def create_app(
         verifying the snapshot path without waiting for an actual
         exchange close.
         """
-        from datetime import datetime, timezone
-
-        from app.core.equity import build_equity_snapshot_row
-
         _require_admin_token(request)
         store = getattr(request.app.state, "store", None)
         if store is None:
