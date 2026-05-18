@@ -9,7 +9,7 @@
       class="status-badge status-badge--reconnecting"
       hx-get="/healthz"
       hx-trigger="every 5s"
-      hx-swap="outerHTML">🟡 IBKR reconnecting</span>
+      hx-swap="outerHTML">🟡 IBKR reconnecting{% if backoff_delay is not none %} ({{ backoff_delay|int }}s){% endif %}</span>
 {% else %}
 <button id="ibkr-status"
         type="button"

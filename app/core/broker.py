@@ -50,6 +50,10 @@ class Position:
     # reqHistoricalData (daily-bar close). Template renders a "prev close"
     # subtext so users know the number isn't ticking live.
     last_price_is_previous_close: bool = False
+    # Set during the reconnect window (broker dropped, last tick is from
+    # before the disconnect). Row template renders ⚠️ + reduced opacity.
+    # Naturally clears when the next live tick replaces the Position.
+    last_price_is_stale: bool = False
     # IB's price-unit divisor. For most contracts = 1. For pence-quoted UK
     # equities (e.g. IQE on LSE) = 100: IB returns last/avgCost in pence,
     # so we divide by 100 to compute mv_native/pnl_native in pounds.
@@ -77,6 +81,17 @@ class Broker(Protocol):
     async def is_connected(self) -> bool: ...
 
     async def get_connection_state(self) -> ConnectionState: ...
+
+    # Optional adapter capability (NOT part of the Protocol's required
+    # surface — adding it here would force every adapter to implement it
+    # and would break @runtime_checkable isinstance checks for stubs that
+    # omit it). Production callers duck-type with
+    #   getattr(broker, "current_backoff_delay", None)
+    # and IbkrAdapter implements it. Future adapters opt in by adding:
+    #   def current_backoff_delay(self) -> float | None: ...
+    # Returns the seconds the reconnect loop is currently sleeping while
+    # in RECONNECTING state, else None. Drives the badge text
+    # "🟡 IBKR reconnecting (5s)" / "(15s)" / "(60s)".
 
     async def get_positions(self) -> list[Position]: ...
 
