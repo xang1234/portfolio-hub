@@ -31,6 +31,11 @@ from app.db.store import Store
 
 _LOG = logging.getLogger(__name__)
 
+# Re-export so existing test imports (and the ibkr adapter's own callers)
+# keep working without having to grep-and-update. The canonical home is
+# app.core.fills — adapters should import from there in new code.
+from app.core.fills import build_fill_row  # noqa: E402, F401  (re-export)
+
 # Production backoff schedule: ~5s, 15s, 60s, then stay at 60s. IBKR's daily
 # restart usually completes within 1-2 minutes; capping at 60s avoids hammering
 # the gateway while keeping recovery within a few minutes worst-case.
@@ -98,6 +103,11 @@ class IbkrAdapter:
         # the loop isn't sleeping a delay. Surfaced via current_backoff_delay()
         # so the badge can render "reconnecting (5s)" / "(15s)" / "(60s)".
         self._current_backoff_delay: float | None = None
+        # Fill-write tasks in flight. Held strongly so the event loop's weak-
+        # reference garbage collector can't reap them mid-INSERT (a real
+        # Python asyncio footgun — see Python docs on create_task). Cleared
+        # via add_done_callback so the set doesn't grow unbounded.
+        self._pending_writes: set[asyncio.Task] = set()
 
     # ---- lifecycle (slice 1) -------------------------------------------------
 
@@ -146,6 +156,22 @@ class IbkrAdapter:
         disconnected_event = getattr(ib, "disconnectedEvent", None)
         if disconnected_event is not None:
             disconnected_event += self._handle_disconnect
+        # Slice 11: wire execDetailsEvent on every connect (initial + each
+        # reconnect retry). Each fresh IB instance carries its own event
+        # object, so this is naturally idempotent — we wire once per
+        # instance, never accumulate handlers across reconnects.
+        #
+        # Note: issue #11 proposed using slice 9's on_reconnected hook for
+        # re-attach. We chose `connect()` instead because (a) on_reconnected
+        # fires only after RECONNECTS, not the initial connect, so we'd
+        # still need a startup site and a hook site — two places to forget;
+        # (b) re-binding IS what connect() does on the new IB session, so
+        # the hook layer would just delegate back to this exact site.
+        # `test_fills_handler_does_not_double_register_across_reconnects`
+        # is the regression guard.
+        exec_event = getattr(ib, "execDetailsEvent", None)
+        if exec_event is not None and self._store is not None:
+            exec_event += self._on_exec_details
         if self._live_positions is not None:
             # If streaming setup fails (e.g. gateway accepted TCP but is still
             # loading accounts, reqPositionsAsync errors), bail out so the
@@ -178,6 +204,10 @@ class IbkrAdapter:
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+        # Drain any in-flight fill INSERTs before tearing down so we don't
+        # orphan the last few writes during a graceful shutdown.
+        if self._pending_writes:
+            await asyncio.gather(*self._pending_writes, return_exceptions=True)
         if self._ib is None:
             self._connection_state = ConnectionState.DISCONNECTED
             return
@@ -772,6 +802,65 @@ class IbkrAdapter:
         )
         self._streaming[conid] = (new_position, contract, ticker)
         self._live_positions.set_position(new_position)
+
+    # ---- fills (slice 11) ---------------------------------------------------
+
+    async def _req_executions(self):
+        """Thin wrapper around IB.reqExecutionsAsync used by the EOD reconcile
+        job. Returns the broker's recent executions (last ~24-48h). Empty list
+        if not connected. Test fakes can override this method directly without
+        touching the underlying IB.
+
+        Passes an explicit ExecutionFilter() so we don't depend on whatever
+        default ib_async chooses for missing filter args — a future release
+        could expand the window unexpectedly.
+        """
+        if self._ib is None:
+            return []
+        req = getattr(self._ib, "reqExecutionsAsync", None)
+        if not callable(req):
+            return []
+        # Lazy import: tests use stub adapters that override _req_executions
+        # without ib_async installed in the path.
+        from ib_async import ExecutionFilter
+        return await req(ExecutionFilter())
+
+    def _on_exec_details(self, trade, fill) -> None:
+        """Synchronous ib_async callback for execDetailsEvent.
+
+        Builds the Store-shaped row and schedules an async INSERT. Store
+        access is async so we can't await inline; create_task runs the
+        write on the same event loop. Failures log and are dropped — the
+        EOD reconcile job is the backstop for missed live fills.
+        """
+        if self._store is None:
+            return
+        try:
+            row = build_fill_row(broker=self.name, fill=fill, fx_service=self._fx_service)
+        except Exception as exc:
+            _LOG.warning("Failed to build fill row for exec %s: %s",
+                         getattr(getattr(fill, "execution", None), "execId", "?"), exc)
+            return
+        if row is None:
+            return
+        # Hold a strong ref in _pending_writes; without this the loop's
+        # weak-ref bookkeeping can GC the task mid-INSERT under load.
+        task = asyncio.create_task(self._persist_fill(row))
+        self._pending_writes.add(task)
+        task.add_done_callback(self._pending_writes.discard)
+
+    async def _persist_fill(self, row: dict) -> None:
+        try:
+            inserted = await self._store.insert_fill(**row)
+        except Exception as exc:
+            _LOG.warning("insert_fill failed for exec %s: %s",
+                         row.get("execution_id", "?"), exc)
+            return
+        if inserted:
+            _LOG.info(
+                "Captured fill exec=%s symbol=%s side=%s",
+                row["execution_id"], row["canonical_symbol"], row["side"],
+            )
 
     # ---- account summary (slice 7) ------------------------------------------
 

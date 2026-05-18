@@ -35,3 +35,41 @@ CREATE TABLE IF NOT EXISTS fx_cache (
     updated_at        TIMESTAMP NOT NULL,
     PRIMARY KEY (pair)
 );
+
+-- Slice 11: fills records every order execution captured from the broker's
+-- execDetailsEvent stream (live) and the EOD reconcile job (backstop). Feeds
+-- future realized-P&L, trade journal, and XIRR UIs in v1.1+.
+--
+-- PK (broker, execution_id): IB's execId is globally unique per broker, so
+-- INSERT OR IGNORE makes both the live stream and the daily reconcile safely
+-- re-runnable without duplicates. fx_rate_at_fill is NULL for USD-denominated
+-- fills since there's nothing to convert.
+--
+-- TODO(v1.x): no retention policy. SQLite handles years of human-scale
+-- trading easily, but a high-frequency account could grow this fast. When
+-- the journal UI lands, decide on an archive/compact strategy (move
+-- rows older than N years to fills_archive, or vacuum to a parquet dump).
+
+CREATE TABLE IF NOT EXISTS fills (
+    broker            TEXT      NOT NULL,
+    account_id        TEXT      NOT NULL,
+    execution_id      TEXT      NOT NULL,
+    canonical_symbol  TEXT      NOT NULL,
+    native_key        TEXT      NOT NULL,
+    asset_class       TEXT      NOT NULL,
+    side              TEXT      NOT NULL,    -- "BUY" | "SELL"
+    quantity          REAL      NOT NULL,
+    price             REAL      NOT NULL,
+    currency          TEXT      NOT NULL,
+    fx_rate_at_fill   REAL,                  -- NULL for USD trades
+    fees_native       REAL,
+    fees_usd          REAL,
+    filled_at         TIMESTAMP NOT NULL,    -- UTC
+    captured_at       TIMESTAMP NOT NULL,    -- UTC, when we observed the fill
+    PRIMARY KEY (broker, execution_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fills_account_filled
+    ON fills(broker, account_id, filled_at);
+CREATE INDEX IF NOT EXISTS idx_fills_symbol
+    ON fills(canonical_symbol, filled_at);

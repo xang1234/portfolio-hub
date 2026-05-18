@@ -145,3 +145,92 @@ class Store:
             "quoted_at": datetime.fromisoformat(row[3]),
             "updated_at": datetime.fromisoformat(row[4]),
         }
+
+    # ---- fills (slice 11) --------------------------------------------------
+
+    async def insert_fill(
+        self,
+        *,
+        broker: str,
+        account_id: str,
+        execution_id: str,
+        canonical_symbol: str,
+        native_key: str,
+        asset_class: str,
+        side: str,
+        quantity: float,
+        price: float,
+        currency: str,
+        filled_at: datetime,
+        fx_rate_at_fill: float | None = None,
+        fees_native: float | None = None,
+        fees_usd: float | None = None,
+    ) -> bool:
+        """INSERT OR IGNORE a fill row. Returns True if a new row was written,
+        False if the (broker, execution_id) PK already existed.
+
+        Idempotent by design — both the live `execDetailsEvent` stream and the
+        EOD reqExecutions reconcile job can race to insert the same fill, and
+        we silently keep the first one rather than raising.
+        """
+        conn = await self._connection()
+        cursor = await conn.execute(
+            """
+            INSERT OR IGNORE INTO fills(
+                broker, account_id, execution_id, canonical_symbol, native_key,
+                asset_class, side, quantity, price, currency,
+                fx_rate_at_fill, fees_native, fees_usd, filled_at, captured_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                broker, account_id, execution_id, canonical_symbol, native_key,
+                asset_class, side, float(quantity), float(price), currency,
+                fx_rate_at_fill, fees_native, fees_usd,
+                filled_at.isoformat(), _utcnow().isoformat(),
+            ),
+        )
+        await conn.commit()
+        return cursor.rowcount > 0
+
+    async def get_fills_since(
+        self,
+        *,
+        broker: str,
+        account_id: str,
+        since: datetime,
+    ) -> list[dict]:
+        """Return fills for (broker, account_id) with filled_at >= since,
+        oldest first. Empty list if none."""
+        conn = await self._connection()
+        async with conn.execute(
+            """
+            SELECT broker, account_id, execution_id, canonical_symbol, native_key,
+                   asset_class, side, quantity, price, currency,
+                   fx_rate_at_fill, fees_native, fees_usd, filled_at, captured_at
+            FROM fills
+            WHERE broker = ? AND account_id = ? AND filled_at >= ?
+            ORDER BY filled_at ASC
+            """,
+            (broker, account_id, since.isoformat()),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [
+            {
+                "broker": r[0],
+                "account_id": r[1],
+                "execution_id": r[2],
+                "canonical_symbol": r[3],
+                "native_key": r[4],
+                "asset_class": r[5],
+                "side": r[6],
+                "quantity": r[7],
+                "price": r[8],
+                "currency": r[9],
+                "fx_rate_at_fill": r[10],
+                "fees_native": r[11],
+                "fees_usd": r[12],
+                "filled_at": datetime.fromisoformat(r[13]),
+                "captured_at": datetime.fromisoformat(r[14]),
+            }
+            for r in rows
+        ]
