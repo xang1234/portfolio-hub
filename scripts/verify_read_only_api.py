@@ -13,14 +13,23 @@ the gateway-side enforcement is on.
 
 USAGE
 -----
-    .venv/bin/python scripts/verify_read_only_api.py
+Run INSIDE the dashboard container so the script reaches the gateway over
+the internal Docker network (port 4001 is NOT exposed on the host):
+
+    docker compose run --rm dashboard \\
+        .venv/bin/python scripts/verify_read_only_api.py
+
+If you really want to run on the host, you'll need to add a temporary
+`ports: ["127.0.0.1:4001:4001"]` to docker-compose.override.yml AND
+set IB_HOST=127.0.0.1 — but the container approach is preferred because
+it leaves no port-forward residue behind.
 
 ENVIRONMENT
 -----------
-    IB_HOST       (default "127.0.0.1" — change to "ib-gateway" if running
-                   inside docker-compose network)
+    IB_HOST       (default "ib-gateway" — Docker internal hostname)
     IB_PORT       (default 4001)
-    IB_CLIENT_ID  (default 99 — use a clientId NOT in use by the dashboard)
+    IB_CLIENT_ID  (default randomized 50-90 to avoid collisions with the
+                   dashboard's clientId=1 and re-runs of this script)
 
 EXIT CODES
 ----------
@@ -50,11 +59,26 @@ _READ_ONLY_HINTS: tuple[str, ...] = (
     "readonly",
     "order placement is disabled",
 )
+# IB error codes that signal the read-only API path. 201 is the documented
+# "Order rejected" code and is the most stable signal (string text changes
+# across gateway versions, codes do not). Other codes added defensively.
+_READ_ONLY_ERROR_CODES: frozenset[int] = frozenset({201, 504, 10148})
+
+_ACCEPTED_STATUSES: frozenset[str] = frozenset({
+    "Submitted", "PreSubmitted", "Filled", "PartiallyFilled",
+})
 
 
 def _looks_like_read_only_rejection(messages: Iterable[str]) -> bool:
+    """Substring match against the joined message blob. Best-effort —
+    paired with error-code matching and the order-status check below for
+    a definitive PASS signal."""
     blob = " ".join(messages).lower()
     return any(hint.lower() in blob for hint in _READ_ONLY_HINTS)
+
+
+def _has_read_only_error_code(error_codes: Iterable[int]) -> bool:
+    return any(c in _READ_ONLY_ERROR_CODES for c in error_codes)
 
 
 async def main() -> int:
@@ -67,15 +91,24 @@ async def main() -> int:
         log.error("ib_async not installed in the active venv")
         return 2
 
-    host = os.environ.get("IB_HOST", "127.0.0.1")
+    import random
+
+    host = os.environ.get("IB_HOST", "ib-gateway")
     port = int(os.environ.get("IB_PORT", "4001"))
-    client_id = int(os.environ.get("IB_CLIENT_ID", "99"))
+    # Randomize clientId so re-runs don't collide with each other or with
+    # the dashboard (clientId=1). Range 50-90 stays clear of common defaults.
+    client_id = int(os.environ.get("IB_CLIENT_ID") or random.randint(50, 90))
 
     ib = IB()
     captured_errors: list[str] = []
+    captured_error_codes: list[int] = []
 
     def _error_handler(reqId, errorCode, errorString, contract=None):
         captured_errors.append(f"[{errorCode}] {errorString}")
+        try:
+            captured_error_codes.append(int(errorCode))
+        except (TypeError, ValueError):
+            pass
         log.warning("IB error %s: %s", errorCode, errorString)
 
     ib.errorEvent += _error_handler
@@ -120,31 +153,46 @@ async def main() -> int:
         for m in log_messages:
             log.info("Trade log: %s", m)
 
+        # Capture BEFORE cancelling so the cancel response can't add a
+        # post-hoc "read-only" hint that misleads the substring matcher.
+        accepted_by_gateway = order_status in _ACCEPTED_STATUSES
+        read_only_signal = (
+            _has_read_only_error_code(captured_error_codes)
+            or _looks_like_read_only_rejection(all_msgs)
+        )
+
         # Defensive: try to cancel even if rejected, so nothing lingers.
         try:
             ib.cancelOrder(order)
         except Exception:
             pass
 
-        if _looks_like_read_only_rejection(all_msgs):
-            log.info("READ-ONLY VERIFIED — gateway rejected the order: %s",
-                     "; ".join(all_msgs)[:200])
+        # PASS requires BOTH signals: a read-only-shaped message/code AND
+        # the order NOT in an accepted status. Either alone is ambiguous —
+        # a substring "read-only" can appear in unrelated messages, and a
+        # non-accepted status alone could be a price-reasonability reject.
+        if read_only_signal and not accepted_by_gateway:
+            log.info(
+                "READ-ONLY VERIFIED — error code %s, status=%s, msgs: %s",
+                captured_error_codes or "(none)", order_status,
+                "; ".join(all_msgs)[:200],
+            )
             return 0
 
-        # If the gateway sent Submitted / PreSubmitted, READ_ONLY_API is OFF.
-        if order_status in ("Submitted", "PreSubmitted", "Filled", "PartiallyFilled"):
+        if accepted_by_gateway:
             log.error(
                 "ORDER WAS ACCEPTED (status=%s). READ_ONLY_API is NOT enforced. "
                 "STOP and fix the gateway config before resuming.", order_status,
             )
             return 1
 
-        # No definitive read-only error AND not an accepted status: this could be
-        # a network timeout, a permissions error, or a misconfiguration. Don't
+        # Not accepted, but no clean read-only signal either: could be a
+        # network timeout, a permissions error, or a misconfiguration. Don't
         # claim success — the operator should investigate.
         log.error(
-            "INCONCLUSIVE — no read-only-mode rejection seen, but order also "
-            "wasn't accepted. Messages: %s", "; ".join(all_msgs) or "(none)",
+            "INCONCLUSIVE — status=%s, codes=%s, msgs: %s",
+            order_status, captured_error_codes or "(none)",
+            "; ".join(all_msgs) or "(none)",
         )
         return 2
     finally:

@@ -61,19 +61,24 @@ if [[ -z "$NON_DEBUG" ]]; then
     exit 0
 fi
 
-# Strip the noise patterns before the dollar-amount grep.
+# Strip the noise patterns before the dollar-amount grep. Each pattern below
+# corresponds to a known log-format token that LOOKS like money to a naive
+# regex but isn't — leaving them in floods the output and hides real leaks.
 SANITIZED="$(echo "$NON_DEBUG" \
     | sed -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:.+-]+//g'    `# ISO timestamps` \
     | sed -E 's/\[[0-9]+\]//g'                                   `# bracketed integers (pids, line nos)` \
     | sed -E 's/conId=[0-9]+//g'                                 `# conId references` \
     | sed -E 's/clientId=[0-9]+//g'                              `# clientId references` \
     | sed -E 's/attempt [0-9]+//g'                               `# reconnect attempt counters` \
-    | sed -E 's/in [0-9]+(\.[0-9]+)?s//g'                        `# "in 5s" / "in 60.0s"` \
+    | sed -E 's/(in|delay:?|next delay:?) [0-9]+(\.[0-9]+)?s?//g' `# "in 5s" / "(next delay: 60.0s)"` \
     | sed -E 's/[Pp]ort[ =][0-9]+//g'                            `# port numbers` \
+    | sed -E 's/[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]+//g'           `# uvicorn IP:port access logs` \
     | sed -E 's/account[ _]?id=U[0-9]+//g'                       `# IB account IDs (UXXXXXX)` \
     | sed -E 's/U[0-9]{7,}//g'                                   `# bare UXXXXXXX account IDs` \
-    | sed -E 's/HTTP\/[0-9.]+ [0-9]+//g'                         `# HTTP status` \
+    | sed -E 's/HTTP\/[0-9.]+( [0-9]+)?//g'                      `# HTTP version + status` \
     | sed -E 's/exec=[A-Za-z0-9.]+//g'                           `# execution IDs` \
+    | sed -E 's/execution_id=[A-Za-z0-9.]+//g'                   `# execution_id= form` \
+    | sed -E 's/[0-9]+(\.[0-9]+)?(ms|us|ns|s|h|m)\b//g'          `# durations (latency=42ms)` \
 )"
 
 # Now look for dollar-amount-looking tokens in what's left.

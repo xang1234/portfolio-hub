@@ -45,7 +45,10 @@ def _format_row(row: dict, columns: list[str]) -> str:
 
 
 async def _dump_equity_snapshots(store, since: datetime) -> None:
-    # We don't have a "since across all accounts" query, so we ask SQLite directly.
+    # Intentionally reaches past store.get_equity_snapshots_since (which is
+    # per-account) — the HITL helper wants "every account since N". If Store
+    # grows a public cross-account query, swap this for that and drop the
+    # _connection() back-door.
     conn = await store._connection()
     async with conn.execute(
         """
@@ -72,6 +75,7 @@ async def _dump_equity_snapshots(store, since: datetime) -> None:
 
 
 async def _dump_fills(store, since: datetime) -> None:
+    # Same back-door rationale as _dump_equity_snapshots above.
     conn = await store._connection()
     async with conn.execute(
         """
@@ -109,9 +113,14 @@ async def _dump_account_summary() -> None:
 
     from app.adapters.ibkr import IbkrAdapter
 
+    import random
+
     host = os.environ.get("IB_HOST", "ib-gateway")
     port = int(os.environ.get("IB_PORT", "4001"))
-    client_id = int(os.environ.get("IB_CLIENT_ID", "98"))
+    # Randomize clientId so re-runs (or parallel runs of this script and
+    # the verify_read_only_api.py script) don't collide on a single slot
+    # and inadvertently kick the dashboard's connection (clientId=1).
+    client_id = int(os.environ.get("IB_CLIENT_ID") or random.randint(50, 90))
 
     adapter = IbkrAdapter(host=host, port=port, client_id=client_id)
     try:

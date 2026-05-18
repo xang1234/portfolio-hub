@@ -15,6 +15,12 @@ red and continue.
 
 ## Pre-flight
 
+> **Scope:** this runbook targets the docker-compose deployment described in
+> `docker-compose.yml`. For local dev runs (uvicorn against a venv, no
+> Docker), the `docker compose exec` / `docker compose logs` steps don't
+> apply — substitute `journalctl`, direct `python` invocations, etc.
+> The HITL gate is for the *deployed* dashboard, not local-dev verification.
+
 Before starting:
 
 ```sh
@@ -79,7 +85,14 @@ tailscale serve --https=443 off
 
 ### 1.4 Port 8080 is not publicly reachable
 
-From a machine on a totally different network (e.g., a friend's phone, a VPS):
+First find the laptop's public WAN IP (run on the laptop itself):
+
+```sh
+curl -s https://ifconfig.me
+```
+
+Then from a machine on a totally different network (e.g., a friend's phone,
+a cheap VPS):
 
 ```sh
 nmap -p 8080 -Pn <laptop-public-IP>
@@ -96,28 +109,43 @@ nmap -p 8080 -Pn <laptop-public-IP>
 
 ```sh
 docker compose exec ib-gateway env | grep READ_ONLY_API
+docker compose exec ib-gateway grep -E '^ReadOnly' /home/ibgateway/Jts/jts.ini 2>/dev/null || true
 ```
 
-**Pass:** prints `READ_ONLY_API=yes`.
-**Fail:** any other value → fix `.env` and `docker compose up -d` before the
-next step. The next step places a real order; doing it without READ_ONLY_API
-risks an actual trade.
+**Pass:** first line prints `READ_ONLY_API=yes` AND the second line prints
+`ReadOnly=true` (or is empty — the gnzsnz image sometimes writes the value
+only when explicitly off).
+**Fail:** any other value on the env line → fix `.env` and
+`docker compose up -d` before the next step. The next step places a real
+order; doing it without READ_ONLY_API risks an actual trade.
+
+**Note:** the env-var check is **necessary but not sufficient**. The env var
+shows what Docker injected, NOT what the gateway process actually wrote into
+its config. §2.2 below is what definitively proves enforcement; treat §2.1
+as a quick pre-flight.
 
 ### 2.2 Gateway rejects order placement with read-only error
 
-Run the standalone verification script:
+Port 4001 is internal-only to the Docker network (`expose:` not `ports:` in
+`docker-compose.yml`), so run the verification script **inside** the
+dashboard container — that gives it network access to the gateway service:
 
 ```sh
-.venv/bin/python scripts/verify_read_only_api.py
+docker compose run --rm dashboard \
+    .venv/bin/python scripts/verify_read_only_api.py
 ```
 
-The script connects to the gateway (NOT through the dashboard), submits a tiny
-limit far below market on a US ETF, asserts the response references read-only
-mode, then disconnects.
+The script connects directly to the gateway (NOT through the dashboard
+process), submits a tiny limit far below market on a US ETF, asserts the
+response includes IB error code 201 (read-only mode) AND the order never
+reaches a Submitted/Filled status, then disconnects. Uses a randomized
+clientId so it doesn't collide with the dashboard's connection (clientId=1).
 
 **Pass:** script exits 0 with the message `READ-ONLY VERIFIED`.
 **Fail:** script exits non-zero or the order gets a real status (Submitted,
 PreSubmitted, Filled). **Stop the runbook** and audit the gateway config.
+**Inconclusive (exit 2):** can't reach the gateway, or the response shape
+was ambiguous — investigate and re-run; do NOT proceed.
 
 **After verification, the script is safe to keep** — it doesn't modify
 anything and is useful to re-run after a gateway upgrade. Per the original
@@ -257,11 +285,25 @@ scripts/audit_privacy_log.sh
 ```
 
 The script greps the last 24h of dashboard logs for digit-pattern tokens
-that look like dollar amounts in non-DEBUG levels.
+that look like dollar amounts in non-DEBUG levels. Noise patterns
+(timestamps, conIds, ephemeral source ports, reconnect delays, durations,
+account IDs) are stripped before the dollar regex.
 
 **Pass:** script exits 0 with `no privacy violations found`.
-**Fail:** lists offending log lines → audit which `_LOG.info(...)` call
-includes a dollar field and fix it.
+**Fail with clearly real leaks:** lines containing `$`, comma-thousands
+forms (`125,000.00`), or appearing inside a snapshot/fill log message →
+audit which `_LOG.info(...)` call includes a dollar field and fix it.
+
+**Triage step** — if the output is non-empty but lists only obviously
+non-monetary tokens (e.g., a new ephemeral source-port number we didn't
+strip, a system-load metric, a row count from a debug-leaked summary):
+add the pattern to the `sed -E` noise-strip pipeline in
+`scripts/audit_privacy_log.sh` and re-run. Record what you added in the
+runbook execution notes. Do NOT treat a noisy output as "rubber-stamp
+pass" — make the script reflect reality, then re-run, then mark pass.
+
+**Tip:** running the audit immediately after `docker compose restart dashboard`
+during a quiet window (markets closed) gives the cleanest baseline.
 
 ### 6.2 No secret material in logs
 
