@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+import asyncio
 import os
 
 from fastapi import FastAPI, Request
@@ -233,9 +234,11 @@ def create_app(
     if market_hours is None:
         market_hours = MarketHours()
 
+    reconcile_task: asyncio.Task | None = None
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        nonlocal broker, store, fx_service
+        nonlocal broker, store, fx_service, reconcile_task
         if manage_lifecycle:
             from app.adapters.ibkr import IbkrAdapter
             from app.core.fx import FxService
@@ -248,6 +251,8 @@ def create_app(
                 await store.init_schema()
             except Exception:
                 pass
+            # Expose the store so admin endpoints (fills reconcile) can find it.
+            app.state.store = store
 
             # Wire the real public-API fetcher; tests pass api_fetcher=None
             # or a stub to avoid network calls.
@@ -269,7 +274,27 @@ def create_app(
             # gateway is still doing 2FA when the dashboard boots), it
             # transitions to RECONNECTING and keeps retrying in the background.
             await broker.start()
+
+            # Spawn the daily fills-reconcile loop. Backstops the live
+            # execDetailsEvent stream — catches anything missed during
+            # disconnect windows. RECONCILE_AT_HHMM is UTC for v1 (no TZ
+            # juggling); operator can shift it to off-hours for their region.
+            from app.jobs.fills_reconcile import (
+                parse_hhmm,
+                scheduled_reconcile_loop,
+            )
+            reconcile_at = parse_hhmm(os.environ.get("RECONCILE_AT_HHMM", "23:00"))
+            reconcile_task = asyncio.create_task(
+                scheduled_reconcile_loop(broker, store, at=reconcile_at),
+            )
         yield
+        if manage_lifecycle:
+            if reconcile_task is not None and not reconcile_task.done():
+                reconcile_task.cancel()
+                try:
+                    await reconcile_task
+                except (asyncio.CancelledError, Exception):
+                    pass
         if manage_lifecycle and broker is not None:
             try:
                 await broker.disconnect()
@@ -350,6 +375,29 @@ def create_app(
                 "backoff_delay": backoff_delay,
             },
         )
+
+    @app.post("/admin/reconcile-fills")
+    async def admin_reconcile_fills(request: Request):
+        """Manual trigger for the EOD fills reconciliation.
+
+        Useful for operators verifying the path works without waiting
+        for the scheduled daily run. Returns the count of newly inserted
+        rows; zero is the healthy steady-state value when the live
+        execDetailsEvent stream is keeping up.
+        """
+        from fastapi import HTTPException
+
+        from app.jobs.fills_reconcile import reconcile_fills
+
+        store = getattr(request.app.state, "store", None)
+        if store is None:
+            raise HTTPException(
+                status_code=503,
+                detail="fills store not configured on this app instance",
+            )
+        broker = request.app.state.broker
+        inserted = await reconcile_fills(broker, store)
+        return JSONResponse({"inserted": inserted})
 
     @app.get("/stream/holdings")
     async def stream_holdings(

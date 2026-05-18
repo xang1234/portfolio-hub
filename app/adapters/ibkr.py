@@ -31,6 +31,68 @@ from app.db.store import Store
 
 _LOG = logging.getLogger(__name__)
 
+_SIDE_MAP = {"BOT": "BUY", "SLD": "SELL"}
+
+
+def build_fill_row(*, broker: str, fill, fx_service) -> dict | None:
+    """Convert an ib_async Fill (contract/execution/commissionReport) into the
+    kwargs dict for Store.insert_fill, snapshotting the current FX rate.
+
+    Returns None when the fill should be dropped (unknown exchange or
+    unrecognised side string). USD fills get fx_rate_at_fill=None and
+    fees_usd == fees_native; non-USD fills convert via fx_service. If the
+    FX rate is missing for a non-USD trade, fx_rate_at_fill and fees_usd
+    are recorded as NULL — we still preserve the trade history.
+    """
+    execution = fill.execution
+    contract = fill.contract
+    commission_report = fill.commissionReport
+
+    side = _SIDE_MAP.get(execution.side)
+    if side is None:
+        _LOG.warning("Unknown execution side %r — dropping fill %s",
+                     execution.side, execution.execId)
+        return None
+
+    primary = getattr(contract, "primaryExchange", "") or ""
+    try:
+        canonical = canonical_symbol(contract.symbol, primary)
+    except ValueError:
+        _LOG.warning(
+            "Unknown primary exchange %r on fill %s — dropping",
+            primary, execution.execId,
+        )
+        return None
+
+    currency = contract.currency or "USD"
+    fees_native = float(commission_report.commission or 0.0)
+    fx_rate: float | None = None
+    fees_usd: float | None = None
+    if currency == "USD":
+        fees_usd = fees_native
+    elif fx_service is not None:
+        rate = fx_service.get_rate_sync(currency)
+        if rate is not None:
+            fx_rate = float(rate.rate)
+            fees_usd = fees_native * fx_rate
+
+    return {
+        "broker": broker,
+        "account_id": execution.acctNumber,
+        "execution_id": execution.execId,
+        "canonical_symbol": canonical,
+        "native_key": str(contract.conId),
+        "asset_class": contract.secType,
+        "side": side,
+        "quantity": float(execution.shares),
+        "price": float(execution.price),
+        "currency": currency,
+        "fx_rate_at_fill": fx_rate,
+        "fees_native": fees_native,
+        "fees_usd": fees_usd,
+        "filled_at": execution.time,
+    }
+
 # Production backoff schedule: ~5s, 15s, 60s, then stay at 60s. IBKR's daily
 # restart usually completes within 1-2 minutes; capping at 60s avoids hammering
 # the gateway while keeping recovery within a few minutes worst-case.
@@ -146,6 +208,13 @@ class IbkrAdapter:
         disconnected_event = getattr(ib, "disconnectedEvent", None)
         if disconnected_event is not None:
             disconnected_event += self._handle_disconnect
+        # Slice 11: wire execDetailsEvent on every connect (initial + each
+        # reconnect retry). Each fresh IB instance carries its own event
+        # object, so this is naturally idempotent — we wire once per
+        # instance, never accumulate handlers across reconnects.
+        exec_event = getattr(ib, "execDetailsEvent", None)
+        if exec_event is not None and self._store is not None:
+            exec_event += self._on_exec_details
         if self._live_positions is not None:
             # If streaming setup fails (e.g. gateway accepted TCP but is still
             # loading accounts, reqPositionsAsync errors), bail out so the
@@ -772,6 +841,56 @@ class IbkrAdapter:
         )
         self._streaming[conid] = (new_position, contract, ticker)
         self._live_positions.set_position(new_position)
+
+    # ---- fills (slice 11) ---------------------------------------------------
+
+    async def _req_executions(self):
+        """Thin wrapper around IB.reqExecutionsAsync used by the EOD reconcile
+        job. Returns the broker's recent executions (last ~24-48h). Empty list
+        if not connected. Test fakes can override this method directly without
+        touching the underlying IB."""
+        if self._ib is None:
+            return []
+        req = getattr(self._ib, "reqExecutionsAsync", None)
+        if not callable(req):
+            return []
+        try:
+            return await req()
+        except Exception:
+            raise
+
+    def _on_exec_details(self, trade, fill) -> None:
+        """Synchronous ib_async callback for execDetailsEvent.
+
+        Builds the Store-shaped row and schedules an async INSERT. Store
+        access is async so we can't await inline; create_task runs the
+        write on the same event loop. Failures log and are dropped — the
+        EOD reconcile job is the backstop for missed live fills.
+        """
+        if self._store is None:
+            return
+        try:
+            row = build_fill_row(broker=self.name, fill=fill, fx_service=self._fx_service)
+        except Exception as exc:
+            _LOG.warning("Failed to build fill row for exec %s: %s",
+                         getattr(getattr(fill, "execution", None), "execId", "?"), exc)
+            return
+        if row is None:
+            return
+        asyncio.create_task(self._persist_fill(row))
+
+    async def _persist_fill(self, row: dict) -> None:
+        try:
+            inserted = await self._store.insert_fill(**row)
+        except Exception as exc:
+            _LOG.warning("insert_fill failed for exec %s: %s",
+                         row.get("execution_id", "?"), exc)
+            return
+        if inserted:
+            _LOG.info(
+                "Captured fill exec=%s symbol=%s side=%s",
+                row["execution_id"], row["canonical_symbol"], row["side"],
+            )
 
     # ---- account summary (slice 7) ------------------------------------------
 
