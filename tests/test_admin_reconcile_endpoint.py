@@ -132,3 +132,78 @@ def test_post_reconcile_without_store_returns_503(tmp_path):
     assert response.status_code == 503
     body = response.json()
     assert "store" in body.get("detail", "").lower()
+
+
+# Shared-secret auth ----------------------------------------------------------
+
+
+def test_admin_endpoint_rejects_missing_token_when_configured(tmp_path, monkeypatch):
+    """When ADMIN_TOKEN is set in the environment, callers must provide
+    the matching X-Admin-Token header. Missing → 401."""
+    import asyncio
+    from app.db.store import Store
+
+    async def _setup():
+        s = Store(tmp_path / "test.db"); await s.init_schema(); return s
+    store = asyncio.run(_setup())
+
+    monkeypatch.setenv("ADMIN_TOKEN", "s3cret")
+    adapter = FakeAdapter([])
+    response = _client(adapter, store).post("/admin/reconcile-fills")
+    assert response.status_code == 401
+    asyncio.run(store.close())
+
+
+def test_admin_endpoint_rejects_wrong_token(tmp_path, monkeypatch):
+    import asyncio
+    from app.db.store import Store
+
+    async def _setup():
+        s = Store(tmp_path / "test.db"); await s.init_schema(); return s
+    store = asyncio.run(_setup())
+
+    monkeypatch.setenv("ADMIN_TOKEN", "s3cret")
+    adapter = FakeAdapter([])
+    response = _client(adapter, store).post(
+        "/admin/reconcile-fills",
+        headers={"X-Admin-Token": "wrong"},
+    )
+    assert response.status_code == 401
+    asyncio.run(store.close())
+
+
+def test_admin_endpoint_accepts_correct_token(tmp_path, monkeypatch):
+    import asyncio
+    from app.db.store import Store
+
+    async def _setup():
+        s = Store(tmp_path / "test.db"); await s.init_schema(); return s
+    store = asyncio.run(_setup())
+
+    monkeypatch.setenv("ADMIN_TOKEN", "s3cret")
+    adapter = FakeAdapter([])
+    response = _client(adapter, store).post(
+        "/admin/reconcile-fills",
+        headers={"X-Admin-Token": "s3cret"},
+    )
+    assert response.status_code == 200
+    asyncio.run(store.close())
+
+
+def test_admin_endpoint_open_when_no_token_env_var(tmp_path, monkeypatch):
+    """When ADMIN_TOKEN is unset (default for dev / tests), no auth is
+    enforced — preserves backward compatibility for non-production setups.
+    Operators opting into auth set the env var; Tailscale is the network
+    boundary otherwise."""
+    import asyncio
+    from app.db.store import Store
+
+    async def _setup():
+        s = Store(tmp_path / "test.db"); await s.init_schema(); return s
+    store = asyncio.run(_setup())
+
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    adapter = FakeAdapter([])
+    response = _client(adapter, store).post("/admin/reconcile-fills")
+    assert response.status_code == 200
+    asyncio.run(store.close())

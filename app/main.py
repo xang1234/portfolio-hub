@@ -14,9 +14,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import asyncio
+import logging
 import os
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -25,6 +26,14 @@ from sse_starlette.sse import EventSourceResponse
 from app.core.broker import Broker, ConnectionState, Position
 from app.core.live_positions import LivePositions, stream_events
 from app.core.markets import STATE_EMOJI, MarketHours, MarketStatus
+from app.jobs.fills_reconcile import (
+    parse_hhmm,
+    reconcile_fills,
+    scheduled_reconcile_loop,
+)
+
+
+_LOG = logging.getLogger(__name__)
 
 
 def _markets_from_positions(
@@ -83,6 +92,27 @@ _STATE_STRINGS = {
 
 def _state_to_string(state: ConnectionState) -> str:
     return _STATE_STRINGS[state]
+
+
+def _require_admin_token(request: Request) -> None:
+    """Enforce shared-secret auth on /admin/* routes when ADMIN_TOKEN is set.
+
+    Raises HTTPException 401 on mismatch. When the env var is unset (default
+    for dev / tests / Tailscale-only deployments), this is a no-op — the
+    operator opts into auth by setting the variable. Read at request time
+    rather than app start so the token can be rotated without restart.
+
+    secrets.compare_digest is used instead of `==` to avoid leaking the
+    token length / prefix through timing side-channels.
+    """
+    import secrets
+
+    expected = os.environ.get("ADMIN_TOKEN", "")
+    if not expected:
+        return
+    provided = request.headers.get("X-Admin-Token", "")
+    if not secrets.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="invalid admin token")
 
 
 def _compute_totals(positions: list[Position]) -> dict:
@@ -279,14 +309,23 @@ def create_app(
             # execDetailsEvent stream — catches anything missed during
             # disconnect windows. RECONCILE_AT_HHMM is UTC for v1 (no TZ
             # juggling); operator can shift it to off-hours for their region.
-            from app.jobs.fills_reconcile import (
-                parse_hhmm,
-                scheduled_reconcile_loop,
-            )
             reconcile_at = parse_hhmm(os.environ.get("RECONCILE_AT_HHMM", "23:00"))
             reconcile_task = asyncio.create_task(
                 scheduled_reconcile_loop(broker, store, at=reconcile_at),
             )
+            # Without an explicit callback, an uncaught loop exception lands
+            # on the asyncio default exception handler — logged under the
+            # 'asyncio' logger but invisible to ops watching only app.*.
+            # Surface it on our logger so a crashed scheduler is noticed.
+            def _on_reconcile_loop_done(t: asyncio.Task) -> None:
+                if t.cancelled():
+                    return
+                exc = t.exception()
+                if exc is not None:
+                    _LOG.error(
+                        "fills reconcile loop crashed: %s", exc, exc_info=exc,
+                    )
+            reconcile_task.add_done_callback(_on_reconcile_loop_done)
         yield
         if manage_lifecycle:
             if reconcile_task is not None and not reconcile_task.done():
@@ -384,11 +423,13 @@ def create_app(
         for the scheduled daily run. Returns the count of newly inserted
         rows; zero is the healthy steady-state value when the live
         execDetailsEvent stream is keeping up.
+
+        Auth: when ADMIN_TOKEN env var is set, callers must supply the
+        matching X-Admin-Token header. Unset → no auth (Tailscale is the
+        network boundary in default deployments). Read at request time
+        so operators can rotate the token without restarting the app.
         """
-        from fastapi import HTTPException
-
-        from app.jobs.fills_reconcile import reconcile_fills
-
+        _require_admin_token(request)
         store = getattr(request.app.state, "store", None)
         if store is None:
             raise HTTPException(

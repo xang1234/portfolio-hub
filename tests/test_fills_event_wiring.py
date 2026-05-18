@@ -202,7 +202,10 @@ async def test_exec_details_event_resurvives_one_reconnect(store):
         broker="IBKR", account_id="U1",
         since=datetime(2026, 5, 1, tzinfo=timezone.utc),
     )
-    assert {r["execution_id"] for r in rows} >= {"e-post-reconnect"}
+    exec_ids = {r["execution_id"] for r in rows}
+    assert "e-post-reconnect" in exec_ids, (
+        f"post-reconnect fill should be persisted; got {exec_ids}"
+    )
 
 
 # --- Idempotency across many reconnects --------------------------------------

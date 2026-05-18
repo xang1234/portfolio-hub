@@ -44,6 +44,11 @@ CREATE TABLE IF NOT EXISTS fx_cache (
 -- INSERT OR IGNORE makes both the live stream and the daily reconcile safely
 -- re-runnable without duplicates. fx_rate_at_fill is NULL for USD-denominated
 -- fills since there's nothing to convert.
+--
+-- TODO(v1.x): no retention policy. SQLite handles years of human-scale
+-- trading easily, but a high-frequency account could grow this fast. When
+-- the journal UI lands, decide on an archive/compact strategy (move
+-- rows older than N years to fills_archive, or vacuum to a parquet dump).
 
 CREATE TABLE IF NOT EXISTS fills (
     broker            TEXT      NOT NULL,

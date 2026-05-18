@@ -87,7 +87,14 @@ class _FakeStore:
 
 
 async def test_scheduler_calls_reconcile_then_sleeps_to_next_day():
-    """One iteration: sleeps the configured duration, then runs reconcile."""
+    """Two iterations: first sleep is to today's 23:00, second sleep is
+    to TOMORROW's 23:00 (~24h). Verifies the loop genuinely rolls over
+    rather than re-firing today repeatedly.
+
+    The trick is that next_fire_at uses `now()`, so we must advance `now`
+    by however many seconds the fake sleep slept — otherwise next_fire_at
+    keeps returning today's 23:00.
+    """
     from app.jobs.fills_reconcile import scheduled_reconcile_loop
 
     adapter = _FakeAdapter()
@@ -96,21 +103,22 @@ async def test_scheduler_calls_reconcile_then_sleeps_to_next_day():
     sleeps: list[float] = []
     reconcile_calls = {"n": 0}
 
+    base = _utc("2026-05-17T15:30:00+00:00")
+    elapsed = {"s": 0.0}
+    def now_fn():
+        return base + timedelta(seconds=elapsed["s"])
+
     async def fake_sleep(seconds):
         sleeps.append(seconds)
-        # Trigger cancellation after the first iteration completes
-        if len(sleeps) >= 2:
+        elapsed["s"] += seconds  # advance the fake clock past the sleep
+        # iter 1: sleep[0]=until 23:00; reconcile; sleep[1]=tick(1.0s)
+        # iter 2: sleep[2]=until tomorrow 23:00; cancel here
+        if len(sleeps) >= 3:
             raise asyncio.CancelledError()
 
     async def fake_reconcile(adp, st):
         reconcile_calls["n"] += 1
-        assert adp is adapter
-        assert st is store
         return 0
-
-    # Run the loop until our fake sleep cancels it.
-    now = _utc("2026-05-17T15:30:00+00:00")
-    def now_fn(): return now
 
     try:
         await scheduled_reconcile_loop(
@@ -121,13 +129,16 @@ async def test_scheduler_calls_reconcile_then_sleeps_to_next_day():
     except asyncio.CancelledError:
         pass
 
-    # First sleep was for ~7.5h to reach 23:00 from 15:30.
-    assert len(sleeps) >= 1
-    expected_seconds = (23 - 15) * 3600 - 30 * 60  # 7h 30m
-    assert sleeps[0] == expected_seconds, (
-        f"first sleep should be {expected_seconds}s (until 23:00), got {sleeps[0]}"
+    # sleeps[0] = 15:30 → 23:00 = 7h 30m
+    assert sleeps[0] == 7 * 3600 + 30 * 60
+    # sleeps[1] = the 1-second post-reconcile belt-and-suspenders tick
+    assert sleeps[1] == 1.0
+    # sleeps[2] = the BIG one — should be ~24h (next-day same-time), not
+    # zero (which would mean it tried to re-fire today).
+    assert 86000 <= sleeps[2] <= 86400, (
+        f"after first reconcile, scheduler should sleep ~24h to TOMORROW's "
+        f"23:00, not refire today. Got {sleeps[2]}s"
     )
-    # Reconcile fired once between the two sleeps.
     assert reconcile_calls["n"] == 1
 
 

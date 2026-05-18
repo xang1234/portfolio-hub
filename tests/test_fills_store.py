@@ -62,6 +62,60 @@ async def test_fills_table_exists_after_init(store):
     assert row is not None, "init_schema() did not create the fills table"
 
 
+async def test_fills_table_migration_on_existing_pre_slice_11_db(tmp_path):
+    """An existing portfolio.db from before slice 11 had no `fills` table.
+    Boot must add it idempotently (CREATE TABLE IF NOT EXISTS) without
+    disturbing the existing name_cache / fx_cache data."""
+    import aiosqlite
+    from app.db.store import Store
+
+    db_path = tmp_path / "preexisting.db"
+
+    # Simulate a pre-slice-11 database: only name_cache + fx_cache exist.
+    pre_schema = """
+        CREATE TABLE name_cache (
+            broker TEXT NOT NULL, native_key TEXT NOT NULL,
+            canonical_symbol TEXT NOT NULL, name_en TEXT NOT NULL,
+            price_magnifier INTEGER NOT NULL DEFAULT 1,
+            updated_at TIMESTAMP NOT NULL,
+            PRIMARY KEY (broker, native_key)
+        );
+        CREATE TABLE fx_cache (
+            pair TEXT NOT NULL, rate REAL NOT NULL, source TEXT NOT NULL,
+            quoted_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL,
+            PRIMARY KEY (pair)
+        );
+    """
+    async with aiosqlite.connect(str(db_path)) as conn:
+        await conn.executescript(pre_schema)
+        await conn.execute(
+            "INSERT INTO name_cache VALUES "
+            "('IBKR', '1', 'AAPL.US', 'APPLE INC', 1, '2026-01-01')"
+        )
+        await conn.commit()
+
+    # Boot the Store on the pre-existing DB.
+    store = Store(db_path)
+    await store.init_schema()
+    try:
+        # fills table should now exist…
+        conn = await store._connection()
+        async with conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='fills'"
+        ) as cur:
+            assert await cur.fetchone() is not None
+        # …and the pre-existing name_cache row should still be there.
+        async with conn.execute(
+            "SELECT name_en FROM name_cache WHERE native_key = '1'"
+        ) as cur:
+            row = await cur.fetchone()
+        assert row is not None and row[0] == "APPLE INC", (
+            "name_cache row was clobbered by the migration"
+        )
+    finally:
+        await store.close()
+
+
 # Insert + read --------------------------------------------------------------
 
 

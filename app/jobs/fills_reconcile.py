@@ -17,7 +17,7 @@ import logging
 from datetime import datetime, time, timedelta, timezone, tzinfo
 from typing import Awaitable, Callable
 
-from app.adapters.ibkr import build_fill_row
+from app.core.fills import build_fill_row
 from app.db.store import Store
 
 
@@ -125,6 +125,7 @@ async def scheduled_reconcile_loop(
             await reconcile(adapter, store)
         except Exception as exc:
             _LOG.warning("scheduled reconcile_fills raised: %s", exc)
-        # Tiny tick to ensure now() advances past `wake_at` so the next
-        # next_fire_at() lands on tomorrow, not today.
+        # Belt-and-suspenders: next_fire_at's strict-after semantic already
+        # prevents same-day re-fire on the boundary, but a 1s buffer guards
+        # against microsecond races on systems with low clock resolution.
         await sleep(1.0)

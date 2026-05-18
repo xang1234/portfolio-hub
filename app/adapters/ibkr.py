@@ -31,67 +31,10 @@ from app.db.store import Store
 
 _LOG = logging.getLogger(__name__)
 
-_SIDE_MAP = {"BOT": "BUY", "SLD": "SELL"}
-
-
-def build_fill_row(*, broker: str, fill, fx_service) -> dict | None:
-    """Convert an ib_async Fill (contract/execution/commissionReport) into the
-    kwargs dict for Store.insert_fill, snapshotting the current FX rate.
-
-    Returns None when the fill should be dropped (unknown exchange or
-    unrecognised side string). USD fills get fx_rate_at_fill=None and
-    fees_usd == fees_native; non-USD fills convert via fx_service. If the
-    FX rate is missing for a non-USD trade, fx_rate_at_fill and fees_usd
-    are recorded as NULL — we still preserve the trade history.
-    """
-    execution = fill.execution
-    contract = fill.contract
-    commission_report = fill.commissionReport
-
-    side = _SIDE_MAP.get(execution.side)
-    if side is None:
-        _LOG.warning("Unknown execution side %r — dropping fill %s",
-                     execution.side, execution.execId)
-        return None
-
-    primary = getattr(contract, "primaryExchange", "") or ""
-    try:
-        canonical = canonical_symbol(contract.symbol, primary)
-    except ValueError:
-        _LOG.warning(
-            "Unknown primary exchange %r on fill %s — dropping",
-            primary, execution.execId,
-        )
-        return None
-
-    currency = contract.currency or "USD"
-    fees_native = float(commission_report.commission or 0.0)
-    fx_rate: float | None = None
-    fees_usd: float | None = None
-    if currency == "USD":
-        fees_usd = fees_native
-    elif fx_service is not None:
-        rate = fx_service.get_rate_sync(currency)
-        if rate is not None:
-            fx_rate = float(rate.rate)
-            fees_usd = fees_native * fx_rate
-
-    return {
-        "broker": broker,
-        "account_id": execution.acctNumber,
-        "execution_id": execution.execId,
-        "canonical_symbol": canonical,
-        "native_key": str(contract.conId),
-        "asset_class": contract.secType,
-        "side": side,
-        "quantity": float(execution.shares),
-        "price": float(execution.price),
-        "currency": currency,
-        "fx_rate_at_fill": fx_rate,
-        "fees_native": fees_native,
-        "fees_usd": fees_usd,
-        "filled_at": execution.time,
-    }
+# Re-export so existing test imports (and the ibkr adapter's own callers)
+# keep working without having to grep-and-update. The canonical home is
+# app.core.fills — adapters should import from there in new code.
+from app.core.fills import build_fill_row  # noqa: E402, F401  (re-export)
 
 # Production backoff schedule: ~5s, 15s, 60s, then stay at 60s. IBKR's daily
 # restart usually completes within 1-2 minutes; capping at 60s avoids hammering
@@ -160,6 +103,11 @@ class IbkrAdapter:
         # the loop isn't sleeping a delay. Surfaced via current_backoff_delay()
         # so the badge can render "reconnecting (5s)" / "(15s)" / "(60s)".
         self._current_backoff_delay: float | None = None
+        # Fill-write tasks in flight. Held strongly so the event loop's weak-
+        # reference garbage collector can't reap them mid-INSERT (a real
+        # Python asyncio footgun — see Python docs on create_task). Cleared
+        # via add_done_callback so the set doesn't grow unbounded.
+        self._pending_writes: set[asyncio.Task] = set()
 
     # ---- lifecycle (slice 1) -------------------------------------------------
 
@@ -212,6 +160,15 @@ class IbkrAdapter:
         # reconnect retry). Each fresh IB instance carries its own event
         # object, so this is naturally idempotent — we wire once per
         # instance, never accumulate handlers across reconnects.
+        #
+        # Note: issue #11 proposed using slice 9's on_reconnected hook for
+        # re-attach. We chose `connect()` instead because (a) on_reconnected
+        # fires only after RECONNECTS, not the initial connect, so we'd
+        # still need a startup site and a hook site — two places to forget;
+        # (b) re-binding IS what connect() does on the new IB session, so
+        # the hook layer would just delegate back to this exact site.
+        # `test_fills_handler_does_not_double_register_across_reconnects`
+        # is the regression guard.
         exec_event = getattr(ib, "execDetailsEvent", None)
         if exec_event is not None and self._store is not None:
             exec_event += self._on_exec_details
@@ -247,6 +204,10 @@ class IbkrAdapter:
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+        # Drain any in-flight fill INSERTs before tearing down so we don't
+        # orphan the last few writes during a graceful shutdown.
+        if self._pending_writes:
+            await asyncio.gather(*self._pending_writes, return_exceptions=True)
         if self._ib is None:
             self._connection_state = ConnectionState.DISCONNECTED
             return
@@ -848,16 +809,21 @@ class IbkrAdapter:
         """Thin wrapper around IB.reqExecutionsAsync used by the EOD reconcile
         job. Returns the broker's recent executions (last ~24-48h). Empty list
         if not connected. Test fakes can override this method directly without
-        touching the underlying IB."""
+        touching the underlying IB.
+
+        Passes an explicit ExecutionFilter() so we don't depend on whatever
+        default ib_async chooses for missing filter args — a future release
+        could expand the window unexpectedly.
+        """
         if self._ib is None:
             return []
         req = getattr(self._ib, "reqExecutionsAsync", None)
         if not callable(req):
             return []
-        try:
-            return await req()
-        except Exception:
-            raise
+        # Lazy import: tests use stub adapters that override _req_executions
+        # without ib_async installed in the path.
+        from ib_async import ExecutionFilter
+        return await req(ExecutionFilter())
 
     def _on_exec_details(self, trade, fill) -> None:
         """Synchronous ib_async callback for execDetailsEvent.
@@ -877,7 +843,11 @@ class IbkrAdapter:
             return
         if row is None:
             return
-        asyncio.create_task(self._persist_fill(row))
+        # Hold a strong ref in _pending_writes; without this the loop's
+        # weak-ref bookkeeping can GC the task mid-INSERT under load.
+        task = asyncio.create_task(self._persist_fill(row))
+        self._pending_writes.add(task)
+        task.add_done_callback(self._pending_writes.discard)
 
     async def _persist_fill(self, row: dict) -> None:
         try:
