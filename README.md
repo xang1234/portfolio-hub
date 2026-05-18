@@ -8,6 +8,14 @@ A lightweight, mobile-friendly multi-broker portfolio dashboard. Hosted on a spa
 
 Planning / pre-implementation. See [`PLAN.md`](./PLAN.md) for the full design and [the issue tracker](../../issues) for the v1 implementation slices.
 
+## Operations
+
+- **Before going live**, work through [`docs/HITL-GOLIVE.md`](./docs/HITL-GOLIVE.md) — the human-in-the-loop verification checklist that gates "ready for daily use." It covers Tailscale boundary, read-only API enforcement, data-vs-TWS spot checks, market-hours panel accuracy, reconnect resilience, privacy logging, and seed-job sanity.
+- Supporting scripts live in [`scripts/`](./scripts):
+  - `verify_read_only_api.py` — confirms the gateway rejects order placement.
+  - `audit_privacy_log.sh` — greps logs for dollar-amount leaks at non-DEBUG levels.
+  - `dump_seeds.py` — prints recent `equity_snapshots` / `fills` rows + live account-summary for TWS comparison.
+
 ## Scope
 
 | Concern | v1 |
