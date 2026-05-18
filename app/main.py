@@ -265,10 +265,11 @@ def create_app(
         market_hours = MarketHours()
 
     reconcile_task: asyncio.Task | None = None
+    snapshot_task: asyncio.Task | None = None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        nonlocal broker, store, fx_service, reconcile_task
+        nonlocal broker, store, fx_service, reconcile_task, snapshot_task
         if manage_lifecycle:
             from app.adapters.ibkr import IbkrAdapter
             from app.core.fx import FxService
@@ -326,14 +327,34 @@ def create_app(
                         "fills reconcile loop crashed: %s", exc, exc_info=exc,
                     )
             reconcile_task.add_done_callback(_on_reconcile_loop_done)
+
+            # Spawn the equity-snapshot scheduler. Sleeps until each held
+            # exchange's next regular-session close (half-day/holiday-aware
+            # via exchange_calendars), captures one row per linked account
+            # into equity_snapshots, then loops.
+            from app.core.markets import MarketHours
+            from app.jobs.snapshot import scheduled_snapshot_loop
+            snapshot_task = asyncio.create_task(
+                scheduled_snapshot_loop(broker, store, MarketHours()),
+            )
+            def _on_snapshot_loop_done(t: asyncio.Task) -> None:
+                if t.cancelled():
+                    return
+                exc = t.exception()
+                if exc is not None:
+                    _LOG.error(
+                        "equity snapshot loop crashed: %s", exc, exc_info=exc,
+                    )
+            snapshot_task.add_done_callback(_on_snapshot_loop_done)
         yield
         if manage_lifecycle:
-            if reconcile_task is not None and not reconcile_task.done():
-                reconcile_task.cancel()
-                try:
-                    await reconcile_task
-                except (asyncio.CancelledError, Exception):
-                    pass
+            for t in (reconcile_task, snapshot_task):
+                if t is not None and not t.done():
+                    t.cancel()
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
         if manage_lifecycle and broker is not None:
             try:
                 await broker.disconnect()
@@ -438,6 +459,43 @@ def create_app(
             )
         broker = request.app.state.broker
         inserted = await reconcile_fills(broker, store)
+        return JSONResponse({"inserted": inserted})
+
+    @app.post("/admin/snapshot")
+    async def admin_snapshot(request: Request, session: str = "MANUAL"):
+        """Manual trigger for an equity-snapshot capture.
+
+        Inserts one equity_snapshots row per linked (broker, account_id),
+        tagged with the supplied `?session=` (default "MANUAL"). Same
+        shared-secret auth as /admin/reconcile-fills. Useful for operators
+        verifying the snapshot path without waiting for an actual
+        exchange close.
+        """
+        from datetime import datetime, timezone
+
+        from app.core.equity import build_equity_snapshot_row
+
+        _require_admin_token(request)
+        store = getattr(request.app.state, "store", None)
+        if store is None:
+            raise HTTPException(
+                status_code=503,
+                detail="equity_snapshots store not configured on this app instance",
+            )
+        broker_ref = request.app.state.broker
+        try:
+            summaries = await broker_ref.get_account_summary()
+        except Exception as exc:
+            _LOG.warning("manual snapshot: get_account_summary failed: %s", exc)
+            summaries = []
+        snapshot_at = datetime.now(timezone.utc)
+        inserted = 0
+        for s in summaries:
+            row = build_equity_snapshot_row(
+                account=s, snapshot_at=snapshot_at, snapshot_session=session,
+            )
+            if await store.insert_equity_snapshot(**row):
+                inserted += 1
         return JSONResponse({"inserted": inserted})
 
     @app.get("/stream/holdings")

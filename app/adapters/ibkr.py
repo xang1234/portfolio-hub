@@ -898,10 +898,16 @@ class IbkrAdapter:
             nlv_value, nlv_ccy = by_acc_tag.get((acc, "NetLiquidation"), ("0", "USD"))
             cash_value, cash_ccy = by_acc_tag.get((acc, "TotalCashValue"), ("0", "USD"))
             bp_value, bp_ccy = by_acc_tag.get((acc, "BuyingPower"), ("0", "USD"))
+            # Slice 10: GrossPositionValue (sum of |market value| across STK)
+            # is needed for equity_snapshots. Missing tag → 0.0; many older
+            # accounts don't report it and we don't want to crash the loop.
+            gpv_value, gpv_ccy = by_acc_tag.get((acc, "GrossPositionValue"), ("0", "USD"))
             base_ccy = nlv_ccy  # NLV's reported currency is the account's base
-            nlv_usd = self._to_usd(_safe_float(nlv_value), nlv_ccy)
+            nlv_native = _safe_float(nlv_value)
+            nlv_usd = self._to_usd(nlv_native, nlv_ccy)
             cash_usd = self._to_usd(_safe_float(cash_value), cash_ccy)
             bp_usd = self._to_usd(_safe_float(bp_value), bp_ccy)
+            gpv_usd = self._to_usd(_safe_float(gpv_value), gpv_ccy)
             out.append(
                 AccountSummary(
                     broker=self.name,
@@ -910,6 +916,8 @@ class IbkrAdapter:
                     net_liquidation_usd=nlv_usd,
                     cash_usd=cash_usd,
                     buying_power_usd=bp_usd,
+                    net_liquidation_native=nlv_native,
+                    gross_position_value_usd=gpv_usd,
                 )
             )
         return out

@@ -73,3 +73,30 @@ CREATE INDEX IF NOT EXISTS idx_fills_account_filled
     ON fills(broker, account_id, filled_at);
 CREATE INDEX IF NOT EXISTS idx_fills_symbol
     ON fills(canonical_symbol, filled_at);
+
+-- Slice 10: equity_snapshots records the account-level Net Liquidation
+-- Value at each held-exchange's regular-session close (NYSE_CLOSE,
+-- HKEX_CLOSE, ...). One row per (account, session, moment). Feeds future
+-- equity-curve / TWR / XIRR UIs in v1.1+.
+--
+-- PK includes snapshot_session so two exchanges resolving to the same
+-- UTC instant (rare cross-DST cases) both retain their rows. The whole
+-- account's NLV is captured at every close — gives sub-daily resolution
+-- to the future curve regardless of which exchange triggered.
+
+CREATE TABLE IF NOT EXISTS equity_snapshots (
+    snapshot_at              TIMESTAMP NOT NULL,    -- UTC, moment of capture
+    snapshot_session         TEXT      NOT NULL,    -- "NYSE_CLOSE" | "HKEX_CLOSE" | "MANUAL" | ...
+    broker                   TEXT      NOT NULL,
+    account_id               TEXT      NOT NULL,
+    base_currency            TEXT      NOT NULL,
+    net_liquidation_native   REAL      NOT NULL,
+    net_liquidation_usd      REAL      NOT NULL,
+    gross_position_value_usd REAL      NOT NULL,
+    cash_usd                 REAL      NOT NULL,
+    captured_at              TIMESTAMP NOT NULL,
+    PRIMARY KEY (snapshot_at, snapshot_session, broker, account_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_equity_session_date
+    ON equity_snapshots(snapshot_session, snapshot_at);

@@ -68,6 +68,12 @@ class AccountSummary:
     net_liquidation_usd: float
     cash_usd: float
     buying_power_usd: float
+    # Slice 10: equity_snapshots needs both the raw native NLV (the
+    # number IB reports in `base_currency`) and the gross stock-position
+    # value in USD for the future equity-curve / TWR / XIRR computations.
+    # Defaults preserve back-compat for stubs that pre-date slice 10.
+    net_liquidation_native: float = 0.0
+    gross_position_value_usd: float = 0.0
 
 
 @runtime_checkable
