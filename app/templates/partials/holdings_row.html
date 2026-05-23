@@ -24,7 +24,8 @@ data-row-detail>
 {% endif %}
 <span class="name-en">{{ position.name_en }}</span>
 <span class="native-symbol">
-{{ position.native_symbol }}
+<span class="tickpill">{{ position.canonical_symbol }}</span>
+{% if position.asset_class == 'CASH' %}<span class="row-tag">CASH</span>{% elif position.exchange %}<span class="row-ex">{{ position.exchange }}</span>{% endif %}
 {% if position.fx_is_fallback %}
 <span class="fx-fallback-badge" title="FX rate from public-API fallback">📡</span>
 {% endif %}
@@ -81,4 +82,5 @@ adds noise without information, so show — instead. #}
 <span class="{% if position.unrealized_pnl_usd >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">{% if position.unrealized_pnl_usd >= 0 %}+{% endif %}{{ "{:,.0f}".format(position.unrealized_pnl_usd) }}</span>
 {% endif %}
 </td>
+<td class="col-num col-weight"><span class="wt-bar"><span class="wt-fill"></span></span><span class="wt-pct"></span></td>
 </tr>
