@@ -24,7 +24,7 @@ from app.core.broker import AccountSummary, ConnectionState, Position
 from app.core.fx import FxConversion, FxService
 from app.core.live_positions import LivePositions
 from app.core.names import NameResolver
-from app.core.symbols import CURRENCY_NAMES, canonical_symbol
+from app.core.symbols import CURRENCY_NAMES, IB_EXCHANGE_TO_SUFFIX, canonical_symbol
 from app.core.yahoo_quotes import default_yahoo_fetcher, yahoo_symbol_for
 from app.db.store import Store
 
@@ -512,10 +512,16 @@ class IbkrAdapter:
             return None
 
         details = details_list[0]
-        primary_exchange = getattr(details.contract, "primaryExchange", "") or ""
+        details_contract = getattr(details, "contract", None)
+        primary_exchange = _first_known_listing_exchange(
+            getattr(details_contract, "primaryExchange", ""),
+            getattr(details_contract, "exchange", ""),
+            getattr(contract, "primaryExchange", ""),
+            getattr(contract, "exchange", ""),
+        )
         if not primary_exchange:
             _LOG.warning(
-                "Contract conId=%s has no primaryExchange; dropping (would produce ambiguous canonical_symbol)",
+                "Contract conId=%s has no recognized listing exchange; dropping (would produce ambiguous canonical_symbol)",
                 native_key,
             )
             return None
@@ -995,6 +1001,32 @@ def _to_positive_float(value) -> float | None:
     if f <= 0:           # IB's "no quote" sentinel is -1.0; 0 also unusable
         return None
     return f
+
+
+def _first_known_listing_exchange(
+    details_primary_exchange: object,
+    details_exchange: object,
+    contract_primary_exchange: object,
+    contract_exchange: object,
+) -> str | None:
+    """Return the first known IB listing exchange from contract fields.
+
+    IB usually supplies ContractDetails.contract.primaryExchange, but some
+    holdings surface their venue only in exchange. SMART is a routing
+    destination, not a listing venue, so it is never accepted as fallback.
+    Unknown non-routing values are treated as authoritative failures rather
+    than skipped, because a later fallback could misclassify the instrument.
+    """
+    primary_candidates = (details_primary_exchange, contract_primary_exchange)
+    fallback_candidates = (details_exchange, contract_exchange)
+    for candidate in primary_candidates + fallback_candidates:
+        exchange = str(candidate or "").strip()
+        if not exchange or exchange == "SMART":
+            continue
+        if exchange in IB_EXCHANGE_TO_SUFFIX:
+            return exchange
+        return None
+    return None
 
 
 def _primary_exchange_from_canonical(canonical: str) -> str | None:

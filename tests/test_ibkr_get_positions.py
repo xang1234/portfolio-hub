@@ -3,7 +3,8 @@
 Slice 2 surface:
   - get_positions() returns list[Position] for STK secType only (CASH in slice 6)
   - Filters out OPT, FUT, BOND, FUND, CRYPTO with no error
-  - Resolves primaryExchange via reqContractDetails (never trusts Contract.exchange)
+  - Resolves listing exchange via reqContractDetails primaryExchange; when
+    that is absent, may use a recognized non-SMART Contract.exchange fallback
   - Builds canonical_symbol via symbols.canonical_symbol()
   - native_key = str(conId)
   - account_id captured from the IB Position row
@@ -289,6 +290,139 @@ async def test_get_positions_taiwan_stock_uses_tw_flag_not_cn(store):
 
     assert p.canonical_symbol == "2330.TW"
     assert p.exchange == "TWSE"
+
+
+async def test_get_positions_uses_real_exchange_when_primary_exchange_missing_for_stockholm(store):
+    """Some IB contracts surface the listing venue in exchange while
+    primaryExchange is empty. A real Swedish holding must not be dropped
+    in that shape."""
+    contract = FakeContract(
+        conId=408903947,
+        symbol="SIVE",
+        secType="STK",
+        currency="SEK",
+        exchange="SFB",
+    )
+    fake_ib = FakeIB(
+        positions=[
+            FakeIBPosition(
+                account="U1",
+                contract=contract,
+                position=1000.0,
+                avgCost=7.0,
+            ),
+        ],
+        contract_details={
+            408903947: FakeContractDetails(
+                contract=FakeContract(
+                    conId=408903947,
+                    symbol="SIVE",
+                    secType="STK",
+                    currency="SEK",
+                    exchange="SFB",
+                    primaryExchange="",
+                ),
+                longName="SIVERS SEMICONDUCTORS AB",
+            ),
+        },
+        last_prices={408903947: 8.0},
+    )
+    adapter = make_adapter(fake_ib, store)
+    await adapter.connect()
+
+    positions = await adapter.get_positions()
+
+    assert len(positions) == 1
+    p = positions[0]
+    assert p.canonical_symbol == "SIVE.SE"
+    assert p.exchange == "SFB"
+    assert p.currency == "SEK"
+    assert p.name_en == "SIVERS SEMICONDUCTORS AB"
+
+
+async def test_get_positions_drops_unknown_primary_exchange_even_if_exchange_fallback_is_known(store):
+    """A non-empty unknown primaryExchange is authoritative enough to reject.
+
+    A later recognized exchange value must not paper over an unknown primary
+    venue, or we could misclassify a contract under the wrong market.
+    """
+    contract = FakeContract(
+        conId=408903947,
+        symbol="SIVE",
+        secType="STK",
+        currency="SEK",
+        exchange="SFB",
+    )
+    fake_ib = FakeIB(
+        positions=[
+            FakeIBPosition(
+                account="U1",
+                contract=contract,
+                position=1000.0,
+                avgCost=7.0,
+            ),
+        ],
+        contract_details={
+            408903947: FakeContractDetails(
+                contract=FakeContract(
+                    conId=408903947,
+                    symbol="SIVE",
+                    secType="STK",
+                    currency="SEK",
+                    exchange="SFB",
+                    primaryExchange="NOT_A_REAL_EXCHANGE",
+                ),
+                longName="SIVERS SEMICONDUCTORS AB",
+            ),
+        },
+        last_prices={408903947: 8.0},
+    )
+    adapter = make_adapter(fake_ib, store)
+    await adapter.connect()
+
+    positions = await adapter.get_positions()
+
+    assert positions == []
+
+
+async def test_get_positions_drops_unknown_exchange_when_primary_exchange_missing(store):
+    contract = FakeContract(
+        conId=123456,
+        symbol="UNKNOWN",
+        secType="STK",
+        currency="SEK",
+        exchange="MADEUP",
+    )
+    fake_ib = FakeIB(
+        positions=[
+            FakeIBPosition(
+                account="U1",
+                contract=contract,
+                position=1000.0,
+                avgCost=7.0,
+            ),
+        ],
+        contract_details={
+            123456: FakeContractDetails(
+                contract=FakeContract(
+                    conId=123456,
+                    symbol="UNKNOWN",
+                    secType="STK",
+                    currency="SEK",
+                    exchange="MADEUP",
+                    primaryExchange="",
+                ),
+                longName="UNKNOWN AB",
+            ),
+        },
+        last_prices={123456: 8.0},
+    )
+    adapter = make_adapter(fake_ib, store)
+    await adapter.connect()
+
+    positions = await adapter.get_positions()
+
+    assert positions == []
 
 
 async def test_get_positions_skips_contract_without_primary_exchange(store):
