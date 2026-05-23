@@ -1,24 +1,23 @@
 {# One per-exchange market-status card. Variables:
    - market               : MarketStatus
    - flag                 : pre-resolved country flag emoji (e.g., 🇭🇰)
-   - market_state_emoji   : { state-name → emoji } map (shared with the drawer
-                            glyph row; the route passes it from
-                            app.core.markets.STATE_EMOJI so the two views can
-                            never drift apart).
-   The data-transition-iso attribute lets client JS render a live countdown
-   without any server push. The market-card--<state> class drives the
-   left-edge colour accent (emoji alone is unreliable across platforms).
+   - market_state_emoji   : { state-name → emoji } map (still passed; the card
+                            now uses a colour dot + label instead, but the
+                            drawer summary glyph row in index.html uses it).
+   The card head is a <div> (not <header>) so Pico's article-header
+   "sectioning" background can't paint a light strip behind it.
+   The market-card--<state> class drives the dot + label colour.
 #}
 <article class="market-card market-card--{{ market.state.value|lower }}" data-transition-iso="{{ market.next_transition_iso }}">
-<header class="market-card__head">
+<div class="market-card__head">
 <span class="market-card__flag">{{ flag }}</span>
-<span class="market-card__state">{{ market_state_emoji[market.state.value] }}</span>
 <span class="market-card__exchange">{{ market.exchange }}</span>
-</header>
+<span class="market-card__dot" title="{{ market.state.value|capitalize }}"></span>
+</div>
+<div class="market-card__state-label">{{ market.state.value|capitalize }}</div>
 {% if market.next_transition_local %}
 <p class="market-card__transition">
-{{ market.next_transition_label }} at <time>{{ market.next_transition_local }}</time>
-<span class="market-card__countdown" data-countdown></span>
+{{ market.next_transition_label }} <time>{{ market.next_transition_local }}</time><span class="market-card__countdown" data-countdown></span>
 </p>
 {% endif %}
 </article>
