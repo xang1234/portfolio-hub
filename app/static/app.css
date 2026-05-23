@@ -164,6 +164,18 @@ body {
   color: var(--ph-text-3); font-size: 12px; font-variant-numeric: tabular-nums;
 }
 
+/* Allocation bar — proportion of total exposure by exchange / cash. */
+.alloc { margin-top: 14px; max-width: 1180px; }
+.alloc-bar {
+  display: flex; height: 9px; border-radius: var(--ph-pill);
+  overflow: hidden; background: var(--ph-surface-3);
+}
+.alloc-seg { height: 100%; }
+.alloc-seg + .alloc-seg { box-shadow: -1px 0 0 var(--ph-bg); }
+.alloc-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 12px; color: var(--ph-text-2); }
+.alloc-it { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.alloc-sw { width: 9px; height: 9px; border-radius: 3px; }
+
 /* ---- 5. CONNECTION STATUS BADGE ------------------------------------------ */
 .status-badge {
   display: inline-flex; align-items: center; gap: 0.35rem;
@@ -231,11 +243,22 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 }
 .market-card {
   margin: 0; padding: 11px 13px; border: 1px solid var(--ph-border);
-  border-radius: var(--ph-r-sm); background: var(--ph-surface-2); box-shadow: none;
+  border-left: 3px solid var(--ph-text-3); border-radius: var(--ph-r-sm);
+  background: var(--ph-surface-2); box-shadow: none;
 }
-.market-card__head { display: flex; align-items: center; gap: 8px; }
+/* State accent on the left edge (emoji alone is unreliable across platforms). */
+.market-card--open     { border-left-color: var(--ph-pos);    }
+.market-card--extended { border-left-color: var(--ph-accent); }
+.market-card--lunch    { border-left-color: var(--ph-warn);   }
+.market-card--closed   { border-left-color: var(--ph-text-3); }
+.market-card--holiday  { border-left-color: var(--ph-text-3); opacity: 0.82; }
+/* Reset Pico's <article> header styling that otherwise paints a light strip. */
+.market-card__head {
+  display: flex; align-items: center; gap: 8px;
+  background: transparent; padding: 0; margin: 0; border: 0;
+}
 .market-card__flag { font-size: 1.05rem; }
-.market-card__exchange { font-weight: 600; font-size: 0.92rem; }
+.market-card__exchange { font-weight: 600; font-size: 0.92rem; color: var(--ph-text); }
 .market-card__state { margin-left: auto; font-size: 0.95rem; }
 .market-card__transition { margin: 8px 0 0; font-size: 0.82rem; color: var(--ph-text-3); }
 .market-card__transition time { color: var(--ph-text-2); }
@@ -298,6 +321,9 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .position-row .price-stale-badge { margin-left: 0.2rem; font-size: 0.8rem; }
 .position-row--stale { opacity: 0.55; }
 
+.holdings-table .col-pnl { font-weight: 600; }
+.position-row .pnl-na { color: var(--ph-text-3); font-weight: 400; }
+
 /* ---- 9. ROW DETAIL MODAL ------------------------------------------------- */
 .row-detail-modal {
   border: 1px solid var(--ph-border); border-radius: var(--ph-r-lg); padding: 0;
@@ -306,6 +332,7 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 }
 .row-detail-modal::backdrop { background: rgba(3, 6, 12, 0.5); backdrop-filter: blur(2px); }
 .row-detail-modal article { padding: 1.1rem 1.3rem 1.3rem; margin: 0; border: 0; background: transparent; box-shadow: none; }
+.row-detail-modal header { background: transparent; padding: 0; margin: 0; border: 0; }
 .row-detail-modal h3 { margin: 0 0 0.25rem; font-size: 1.15rem; }
 .row-detail-modal .muted { color: var(--ph-text-3); font-size: 0.85rem; margin: 0 0 0.9rem; }
 .row-detail-grid {

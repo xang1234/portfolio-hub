@@ -19,6 +19,10 @@ title="Total unrealized P&amp;L (USD)">{% if totals.pnl_is_positive %}+${{ "{:,.
 <span class="total-pnl-pct {% if totals.pnl_is_positive %}pnl-positive{% else %}pnl-negative{% endif %}"
 title="Unrealized P&amp;L %">{% if totals.pnl_is_positive %}+{% endif %}{{ "{:.2f}".format(totals.pnl_pct) }}%</span>
 </div>
+<div class="alloc">
+<div class="alloc-bar" id="ph-alloc-bar"></div>
+<div class="alloc-legend" id="ph-alloc-legend"></div>
+</div>
 </div>
 {% endif %}
 {# Build a helper for chip URLs that preserves the OTHER filter values. #}
@@ -154,6 +158,9 @@ Market Value <span class="sort-indicator" data-sort-indicator></span>
 <th class="col-num sortable" data-sort-key="mv_usd" role="button" tabindex="0">
 MV USD <span class="sort-indicator" data-sort-indicator></span>
 </th>
+<th class="col-num sortable col-pnl" data-sort-key="pnl_usd" role="button" tabindex="0">
+P&amp;L USD <span class="sort-indicator" data-sort-indicator></span>
+</th>
 </tr>
 </thead>
 {%- set sse_qs = [] -%}
@@ -175,4 +182,39 @@ sse-swap="snapshot,positions">
 <small>Make sure IB Gateway is connected and your account has holdings.</small>
 </article>
 {% endif %}
+<script>
+(function () {
+  var PALETTE = ['#5b9dff', '#34d399', '#fbbf24', '#f472b6', '#a78bfa',
+                 '#fb7185', '#22d3ee', '#84cc16', '#fb923c', '#94a3b8'];
+  function buildAllocation() {
+    var bar = document.getElementById('ph-alloc-bar');
+    var legend = document.getElementById('ph-alloc-legend');
+    if (!bar) return;
+    var rows = document.querySelectorAll('#positions-tbody .position-row');
+    var groups = {}, total = 0;
+    rows.forEach(function (r) {
+      var key = r.getAttribute('data-asset-class') === 'CASH'
+        ? 'Cash' : (r.getAttribute('data-exchange') || 'Other');
+      var v = parseFloat(r.getAttribute('data-mv-usd')) || 0;
+      if (v <= 0) return;
+      groups[key] = (groups[key] || 0) + v; total += v;
+    });
+    if (total <= 0) { bar.innerHTML = ''; if (legend) legend.innerHTML = ''; return; }
+    var entries = Object.keys(groups)
+      .map(function (k) { return [k, groups[k]]; })
+      .sort(function (a, b) { return b[1] - a[1]; });
+    bar.innerHTML = entries.map(function (e, i) {
+      var pct = e[1] / total * 100;
+      return '<span class="alloc-seg" style="width:' + pct + '%;background:'
+        + PALETTE[i % PALETTE.length] + '" title="' + e[0] + ' ' + Math.round(pct) + '%"></span>';
+    }).join('');
+    if (legend) legend.innerHTML = entries.slice(0, 8).map(function (e, i) {
+      return '<span class="alloc-it"><span class="alloc-sw" style="background:'
+        + PALETTE[i % PALETTE.length] + '"></span>' + e[0] + ' ' + Math.round(e[1] / total * 100) + '%</span>';
+    }).join('');
+  }
+  buildAllocation();
+  document.body.addEventListener('htmx:afterSwap', buildAllocation);
+})();
+</script>
 {% endblock %}

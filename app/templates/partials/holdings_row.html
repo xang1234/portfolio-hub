@@ -1,77 +1,84 @@
 <tr id="row-{{ position.broker }}-{{ position.account_id }}-{{ position.canonical_symbol }}"
-    class="position-row{% if position.asset_class == 'CASH' %} position-row--cash{% endif %}{% if position.last_price_is_stale %} position-row--stale{% endif %}"
-    data-quantity="{{ position.quantity }}"
-    data-last-price="{{ position.last_price }}"
-    data-mv-native="{{ position.market_value_native }}"
-    data-mv-usd="{{ position.market_value_usd }}"
-    data-pnl-usd="{{ position.unrealized_pnl_usd }}"
-    data-avg-cost="{{ position.avg_cost }}"
-    data-broker="{{ position.broker }}"
-    data-account="{{ position.account_id }}"
-    data-exchange="{{ position.exchange }}"
-    data-currency="{{ position.currency }}"
-    data-native-key="{{ position.native_key }}"
-    data-canonical-symbol="{{ position.canonical_symbol }}"
-    data-name-en="{{ position.name_en }}"
-    data-asset-class="{{ position.asset_class }}"
-    data-row-detail>
-    <td class="col-name">
-        {% if position.asset_class == 'CASH' %}
-            <span class="cash-indicator" title="FX cash balance">💵</span>
-            <span class="flag" aria-label="{{ position.currency }}">{{ flag_for_currency(position.currency) }}</span>
-        {% elif position.exchange %}
-            <span class="flag" aria-label="{{ position.exchange }}">{{ flag_for_exchange(position.exchange) }}</span>
-        {% endif %}
-        <span class="name-en">{{ position.name_en }}</span>
-        <span class="native-symbol">
-            {{ position.native_symbol }}
-            {% if position.fx_is_fallback %}
-                <span class="fx-fallback-badge" title="FX rate from public-API fallback">📡</span>
-            {% endif %}
-            {% if (active_account or 'All') == 'All' and position.account_id %}
-                <span class="account-pill" title="IBKR account">{{ position.account_id }}</span>
-            {% endif %}
-        </span>
-        {% set row_market = (market_by_ib or {}).get(position.exchange) %}
-        {% if position.asset_class == 'STK' and row_market and row_market.state.value == 'LUNCH' %}
-        <span class="lunch-note"
-              title="The price shown is the most recent tick from before this midday session pause.">
-            (lunch break{% if row_market.next_transition_local %} — reopens {{ row_market.next_transition_local }}{% endif %})
-        </span>
-        {% endif %}
-    </td>
-    <td class="col-num">{{ "{:,.0f}".format(position.quantity) }}</td>
-    <td class="col-num">
-        {% if position.asset_class == 'CASH' %}
-            {# Last price for cash is 1.0 by definition — rendering "1.00"
-               adds noise without information, so show — instead. #}
-            —
-        {% elif position.last_price > 0 %}
-            {{ "{:,.2f}".format(position.last_price) }}
-            {% if position.price_magnifier > 1 %}
-                <small class="pence-suffix" title="Quoted in pence (1/100 of {{ position.currency }})">GBp</small>
-            {% endif %}
-            {% if position.last_price_is_previous_close %}
-                <small class="prev-close-note" title="No live market data; showing previous close">prev close</small>
-            {% endif %}
-            {% if position.last_price_is_stale %}
-                <span class="price-stale-badge" title="Broker reconnecting — price hasn't ticked since the disconnect">⚠️</span>
-            {% endif %}
-        {% else %}—{% endif %}
-    </td>
-    <td class="col-num">
-        {% if position.market_value_native > 0 %}
-            {{ "{:,.0f}".format(position.market_value_native) }}<small class="currency">{{ position.currency }}</small>
-        {% else %}—{% endif %}
-    </td>
-    <td class="col-num">
-        {% if position.fx_unavailable or (position.market_value_usd == 0 and position.currency != 'USD') %}
-            —
-        {% else %}
-            {{ "{:,.0f}".format(position.market_value_usd) }}
-            {% if position.fx_is_stale %}
-                <span class="fx-stale-badge" title="FX rate is stale">⚠️</span>
-            {% endif %}
-        {% endif %}
-    </td>
+class="position-row{% if position.asset_class == 'CASH' %} position-row--cash{% endif %}{% if position.last_price_is_stale %} position-row--stale{% endif %}"
+data-quantity="{{ position.quantity }}"
+data-last-price="{{ position.last_price }}"
+data-mv-native="{{ position.market_value_native }}"
+data-mv-usd="{{ position.market_value_usd }}"
+data-pnl-usd="{{ position.unrealized_pnl_usd }}"
+data-avg-cost="{{ position.avg_cost }}"
+data-broker="{{ position.broker }}"
+data-account="{{ position.account_id }}"
+data-exchange="{{ position.exchange }}"
+data-currency="{{ position.currency }}"
+data-native-key="{{ position.native_key }}"
+data-canonical-symbol="{{ position.canonical_symbol }}"
+data-name-en="{{ position.name_en }}"
+data-asset-class="{{ position.asset_class }}"
+data-row-detail>
+<td class="col-name">
+{% if position.asset_class == 'CASH' %}
+<span class="cash-indicator" title="FX cash balance">💵</span>
+<span class="flag" aria-label="{{ position.currency }}">{{ flag_for_currency(position.currency) }}</span>
+{% elif position.exchange %}
+<span class="flag" aria-label="{{ position.exchange }}">{{ flag_for_exchange(position.exchange) }}</span>
+{% endif %}
+<span class="name-en">{{ position.name_en }}</span>
+<span class="native-symbol">
+{{ position.native_symbol }}
+{% if position.fx_is_fallback %}
+<span class="fx-fallback-badge" title="FX rate from public-API fallback">📡</span>
+{% endif %}
+{% if (active_account or 'All') == 'All' and position.account_id %}
+<span class="account-pill" title="IBKR account">{{ position.account_id }}</span>
+{% endif %}
+</span>
+{% set row_market = (market_by_ib or {}).get(position.exchange) %}
+{% if position.asset_class == 'STK' and row_market and row_market.state.value == 'LUNCH' %}
+<span class="lunch-note"
+title="The price shown is the most recent tick from before this midday session pause.">
+(lunch break{% if row_market.next_transition_local %} — reopens {{ row_market.next_transition_local }}{% endif %})
+</span>
+{% endif %}
+</td>
+<td class="col-num">{{ "{:,.0f}".format(position.quantity) }}</td>
+<td class="col-num">
+{% if position.asset_class == 'CASH' %}
+{# Last price for cash is 1.0 by definition — rendering "1.00"
+adds noise without information, so show — instead. #}
+—
+{% elif position.last_price > 0 %}
+{{ "{:,.2f}".format(position.last_price) }}
+{% if position.price_magnifier > 1 %}
+<small class="pence-suffix" title="Quoted in pence (1/100 of {{ position.currency }})">GBp</small>
+{% endif %}
+{% if position.last_price_is_previous_close %}
+<small class="prev-close-note" title="No live market data; showing previous close">prev close</small>
+{% endif %}
+{% if position.last_price_is_stale %}
+<span class="price-stale-badge" title="Broker reconnecting — price hasn't ticked since the disconnect">⚠️</span>
+{% endif %}
+{% else %}—{% endif %}
+</td>
+<td class="col-num">
+{% if position.market_value_native > 0 %}
+{{ "{:,.0f}".format(position.market_value_native) }}<small class="currency">{{ position.currency }}</small>
+{% else %}—{% endif %}
+</td>
+<td class="col-num">
+{% if position.fx_unavailable or (position.market_value_usd == 0 and position.currency != 'USD') %}
+—
+{% else %}
+{{ "{:,.0f}".format(position.market_value_usd) }}
+{% if position.fx_is_stale %}
+<span class="fx-stale-badge" title="FX rate is stale">⚠️</span>
+{% endif %}
+{% endif %}
+</td>
+<td class="col-num col-pnl">
+{% if position.asset_class == 'CASH' or position.fx_unavailable or (position.market_value_usd == 0 and position.currency != 'USD') %}
+<span class="pnl-na" title="No USD P&amp;L for this row">—</span>
+{% else %}
+<span class="{% if position.unrealized_pnl_usd >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">{% if position.unrealized_pnl_usd >= 0 %}+{% endif %}{{ "{:,.0f}".format(position.unrealized_pnl_usd) }}</span>
+{% endif %}
+</td>
 </tr>
