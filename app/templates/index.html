@@ -4,10 +4,16 @@
 <div class="app-bar">
 <span class="app-bar__brand"><span class="app-bar__mark">P</span>Portfolio Hub</span>
 <span class="app-bar__spacer"></span>
+<span class="conn-dots" aria-label="Broker connections">
+{% for b in all_known_brokers %}
+<span class="cdot{% if b in enabled_brokers %}{% if b == 'IBKR' and state != 'connected' %} off{% else %} on{% endif %}{% else %} idle{% endif %}" title="{{ b }}{% if b not in enabled_brokers %} — not enabled{% endif %}"></span>
+{% endfor %}
+</span>
 {% include "partials/status_badge.html" %}
 <span class="updated-timestamp"
 data-updated-at="{{ updated_at_iso }}"
 title="Last update">…</span>
+<button type="button" class="theme-toggle" onclick="phToggleTheme()" aria-label="Toggle light or dark theme" title="Toggle theme">◐</button>
 </div>
 {% if totals %}
 <div class="hero">
@@ -33,6 +39,17 @@ title="Unrealized P&amp;L %">{% if totals.pnl_is_positive %}+{% endif %}{{ "{:.2
 {%- if asset and asset != 'All' %}{{ parts.append('asset=' ~ asset) or '' }}{% endif -%}
 /{% if parts %}?{{ parts|join('&') }}{% endif %}
 {%- endmacro %}
+<div class="controls">
+<span class="ctl-label">Type</span>
+<nav class="asset-chips" aria-label="Filter by asset class">
+{% for label in ['All', 'STK', 'CASH'] %}
+<a class="asset-chip{% if active_asset == label %} asset-chip--active{% endif %}"
+href="{{ chip_url(account=active_account, asset=label, broker=active_broker) }}"
+hx-get="{{ chip_url(account=active_account, asset=label, broker=active_broker) }}" hx-push-url="true" hx-target="body" hx-swap="outerHTML"
+{% if active_asset == label %}aria-current="page"{% endif %}>{{ label }}</a>
+{% endfor %}
+</nav>
+<span class="ctl-label">Broker</span>
 <nav class="broker-chips" aria-label="Filter by broker">
 <a class="broker-chip{% if active_broker == 'All' %} broker-chip--active{% endif %}"
 href="{{ chip_url(account=active_account, asset=active_asset, broker='All') }}"
@@ -51,6 +68,7 @@ title="{{ b }} adapter not enabled yet">{{ b }}</span>
 {% endfor %}
 </nav>
 {% if account_summaries and account_summaries|length > 1 %}
+<span class="ctl-label">Account</span>
 <nav class="account-chips" aria-label="Filter by account">
 <a class="account-chip{% if active_account == 'All' %} account-chip--active{% endif %}"
 href="{{ chip_url(account='All', asset=active_asset, broker=active_broker) }}"
@@ -64,14 +82,8 @@ hx-get="{{ chip_url(account=s.account_id, asset=active_asset, broker=active_brok
 {% endfor %}
 </nav>
 {% endif %}
-<nav class="asset-chips" aria-label="Filter by asset class">
-{% for label in ['All', 'STK', 'CASH'] %}
-<a class="asset-chip{% if active_asset == label %} asset-chip--active{% endif %}"
-href="{{ chip_url(account=active_account, asset=label, broker=active_broker) }}"
-hx-get="{{ chip_url(account=active_account, asset=label, broker=active_broker) }}" hx-push-url="true" hx-target="body" hx-swap="outerHTML"
-{% if active_asset == label %}aria-current="page"{% endif %}>{{ label }}</a>
-{% endfor %}
-</nav>
+<div class="search"><span class="search-ic" aria-hidden="true">⌕</span><input type="search" id="ph-search" placeholder="Filter holdings…" aria-label="Filter holdings" autocomplete="off"></div>
+</div>
 {% if active_account and active_account != 'All' %}
 {% set selected = (account_summaries | selectattr('account_id', 'equalto', active_account) | list | first) %}
 {% if selected %}
@@ -153,14 +165,15 @@ Qty <span class="sort-indicator" data-sort-indicator></span>
 Last <span class="sort-indicator" data-sort-indicator></span>
 </th>
 <th class="col-num sortable" data-sort-key="mv_native" role="button" tabindex="0">
-Market Value <span class="sort-indicator" data-sort-indicator></span>
+Mkt value (native) <span class="sort-indicator" data-sort-indicator></span>
 </th>
 <th class="col-num sortable" data-sort-key="mv_usd" role="button" tabindex="0">
-MV USD <span class="sort-indicator" data-sort-indicator></span>
+Mkt value (USD) <span class="sort-indicator" data-sort-indicator></span>
 </th>
 <th class="col-num sortable col-pnl" data-sort-key="pnl_usd" role="button" tabindex="0">
-P&amp;L USD <span class="sort-indicator" data-sort-indicator></span>
+Unrealized P&amp;L <span class="sort-indicator" data-sort-indicator></span>
 </th>
+<th class="col-num col-weight">Weight</th>
 </tr>
 </thead>
 {%- set sse_qs = [] -%}
@@ -186,35 +199,69 @@ sse-swap="snapshot,positions">
 (function () {
   var PALETTE = ['#5b9dff', '#34d399', '#fbbf24', '#f472b6', '#a78bfa',
                  '#fb7185', '#22d3ee', '#84cc16', '#fb923c', '#94a3b8'];
-  function buildAllocation() {
+  function rows() {
+    return Array.prototype.slice.call(
+      document.querySelectorAll('#positions-tbody .position-row'));
+  }
+  function build() {
+    var rs = rows();
+    var total = 0;
+    rs.forEach(function (r) { var v = parseFloat(r.getAttribute('data-mv-usd')) || 0; if (v > 0) total += v; });
+
+    // Hero allocation bar (by exchange / cash)
     var bar = document.getElementById('ph-alloc-bar');
     var legend = document.getElementById('ph-alloc-legend');
-    if (!bar) return;
-    var rows = document.querySelectorAll('#positions-tbody .position-row');
-    var groups = {}, total = 0;
-    rows.forEach(function (r) {
-      var key = r.getAttribute('data-asset-class') === 'CASH'
-        ? 'Cash' : (r.getAttribute('data-exchange') || 'Other');
-      var v = parseFloat(r.getAttribute('data-mv-usd')) || 0;
-      if (v <= 0) return;
-      groups[key] = (groups[key] || 0) + v; total += v;
-    });
-    if (total <= 0) { bar.innerHTML = ''; if (legend) legend.innerHTML = ''; return; }
-    var entries = Object.keys(groups)
-      .map(function (k) { return [k, groups[k]]; })
-      .sort(function (a, b) { return b[1] - a[1]; });
-    bar.innerHTML = entries.map(function (e, i) {
-      var pct = e[1] / total * 100;
-      return '<span class="alloc-seg" style="width:' + pct + '%;background:'
-        + PALETTE[i % PALETTE.length] + '" title="' + e[0] + ' ' + Math.round(pct) + '%"></span>';
-    }).join('');
-    if (legend) legend.innerHTML = entries.slice(0, 8).map(function (e, i) {
-      return '<span class="alloc-it"><span class="alloc-sw" style="background:'
-        + PALETTE[i % PALETTE.length] + '"></span>' + e[0] + ' ' + Math.round(e[1] / total * 100) + '%</span>';
-    }).join('');
+    if (bar) {
+      if (total <= 0) { bar.innerHTML = ''; if (legend) legend.innerHTML = ''; }
+      else {
+        var groups = {};
+        rs.forEach(function (r) {
+          var v = parseFloat(r.getAttribute('data-mv-usd')) || 0; if (v <= 0) return;
+          var key = r.getAttribute('data-asset-class') === 'CASH'
+            ? 'Cash' : (r.getAttribute('data-exchange') || 'Other');
+          groups[key] = (groups[key] || 0) + v;
+        });
+        var entries = Object.keys(groups).map(function (k) { return [k, groups[k]]; })
+          .sort(function (a, b) { return b[1] - a[1]; });
+        bar.innerHTML = entries.map(function (e, i) {
+          var p = e[1] / total * 100;
+          return '<span class="alloc-seg" style="width:' + p + '%;background:'
+            + PALETTE[i % PALETTE.length] + '" title="' + e[0] + ' ' + Math.round(p) + '%"></span>';
+        }).join('');
+        if (legend) legend.innerHTML = entries.slice(0, 8).map(function (e, i) {
+          return '<span class="alloc-it"><span class="alloc-sw" style="background:'
+            + PALETTE[i % PALETTE.length] + '"></span>' + e[0] + ' ' + Math.round(e[1] / total * 100) + '%</span>';
+        }).join('');
+      }
+    }
+
+    // Per-row weight bars (scaled so the largest holding fills the bar)
+    if (total > 0) {
+      var maxPct = 0;
+      rs.forEach(function (r) { var p = (parseFloat(r.getAttribute('data-mv-usd')) || 0) / total * 100; if (p > maxPct) maxPct = p; });
+      rs.forEach(function (r) {
+        var p = (parseFloat(r.getAttribute('data-mv-usd')) || 0) / total * 100;
+        var fill = r.querySelector('.wt-fill'); var pct = r.querySelector('.wt-pct');
+        if (fill) fill.style.width = (maxPct > 0 ? p / maxPct * 100 : 0) + '%';
+        if (pct) pct.textContent = (p >= 1 ? Math.round(p) : p.toFixed(1)) + '%';
+      });
+    }
   }
-  buildAllocation();
-  document.body.addEventListener('htmx:afterSwap', buildAllocation);
+  function applySearch() {
+    var s = document.getElementById('ph-search'); if (!s) return;
+    var q = s.value.trim().toLowerCase();
+    rows().forEach(function (r) {
+      var hay = ((r.getAttribute('data-name-en') || '') + ' '
+        + (r.getAttribute('data-canonical-symbol') || '')).toLowerCase();
+      r.style.display = (!q || hay.indexOf(q) >= 0) ? '' : 'none';
+    });
+  }
+  function wireSearch() {
+    var s = document.getElementById('ph-search');
+    if (s && !s._phWired) { s._phWired = true; s.addEventListener('input', applySearch); }
+  }
+  build(); wireSearch();
+  document.body.addEventListener('htmx:afterSwap', function () { build(); wireSearch(); applySearch(); });
 })();
 </script>
 {% endblock %}
