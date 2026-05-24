@@ -9,6 +9,7 @@ yahoo_symbol_for function maps from our canonical IB exchange code +
 native symbol to the Yahoo format.
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -163,6 +164,7 @@ class FakeIB:
         self._positions = positions
         self._details = details
         self._connected = False
+        self.historical_calls = []
     async def connectAsync(self, host, port, clientId):
         self._connected = True
     def disconnect(self): self._connected = False
@@ -176,6 +178,7 @@ class FakeIB:
         return [_NullTicker(c) for c in contracts]
     async def reqHistoricalDataAsync(self, contract, **kwargs):
         # IB Error 162 simulated: no market data permissions
+        self.historical_calls.append(contract.conId)
         raise ValueError("No market data permissions for TSEJ STK")
 
 
@@ -208,7 +211,7 @@ async def store(tmp_path):
 
 
 async def test_yahoo_fallback_kicks_in_when_ib_historical_fails(store):
-    """TSEJ stock: ticker returns null, IB historical raises, Yahoo succeeds."""
+    """TSEJ stock: ticker returns null and Yahoo succeeds."""
     pos, details = _tse_position()
     fake_ib = FakeIB(positions=[pos], details={14016494: details})
 
@@ -231,6 +234,40 @@ async def test_yahoo_fallback_kicks_in_when_ib_historical_fails(store):
     assert positions[0].last_price_is_previous_close is True
     # Yahoo was called with the Tokyo symbol
     assert "6315.T" in yahoo_calls
+
+
+async def test_yahoo_fallback_bypasses_slow_ib_historical_for_mapped_exchange(store):
+    """When Yahoo knows the exchange, don't block startup on IB historical
+    requests that commonly time out for unsubscribed international markets."""
+    pos, details = _tse_position()
+
+    class SlowHistoricalIB(FakeIB):
+        async def reqHistoricalDataAsync(self, contract, **kwargs):
+            self.historical_calls.append(contract.conId)
+            await asyncio.sleep(10)
+            return []
+
+    fake_ib = SlowHistoricalIB(positions=[pos], details={14016494: details})
+
+    yahoo_calls = []
+
+    async def fake_yahoo_fetcher(symbol: str) -> float | None:
+        yahoo_calls.append(symbol)
+        return 1234.5
+
+    from app.adapters.ibkr import IbkrAdapter
+
+    adapter = IbkrAdapter(
+        host="ib-gateway", port=4003, client_id=1,
+        ib_factory=lambda: fake_ib, store=store,
+        yahoo_quote_fetcher=fake_yahoo_fetcher,
+    )
+    await adapter.connect()
+    positions = await asyncio.wait_for(adapter.get_positions(), timeout=0.2)
+
+    assert positions[0].last_price == pytest.approx(1234.5)
+    assert yahoo_calls == ["6315.T"]
+    assert fake_ib.historical_calls == []
 
 
 async def test_yahoo_fallback_skipped_when_exchange_not_mapped(store):

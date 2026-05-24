@@ -4,7 +4,7 @@ Public surface (Broker Protocol):
   - connect / disconnect / is_connected / get_connection_state
   - get_positions(): STK rows only (CASH still pending), with English name
     resolution via reqContractDetails, FX conversion to USD via FxService,
-    previous-close fallback (IB historical → Yahoo) for unsubscribed markets,
+    previous-close fallback (Yahoo → fast IB historical) for unsubscribed markets,
     and pence-quoted UK equity normalization via priceMagnifier.
   - get_account_summary(): minimal stub; expanded later when accountValues()
     integration lands.
@@ -30,6 +30,8 @@ from app.db.store import Store
 
 
 _LOG = logging.getLogger(__name__)
+_IB_HISTORICAL_TIMEOUT_SECONDS = 2.0
+_PREVIOUS_CLOSE_FALLBACK_CONCURRENCY = 8
 
 # Re-export so existing test imports (and the ibkr adapter's own callers)
 # keep working without having to grep-and-update. The canonical home is
@@ -94,6 +96,10 @@ class IbkrAdapter:
         # Streaming-mode state — populated only when live_positions is provided.
         # Maps conId -> (Position, contract, ticker) so tick callbacks can recompute.
         self._streaming: dict[int, tuple[Position, object, object]] = {}
+        # Per-conId previous-close cache, keyed by UTC date. A poll loop hitting
+        # get_positions every few seconds otherwise spawns N reqHistoricalData
+        # calls per cycle — once a day per contract is enough for prev-close.
+        self._previous_close_cache: dict[int, tuple[object, float]] = {}
         self._connection_state: ConnectionState = ConnectionState.DISCONNECTED
         self._reconnect_task: asyncio.Task | None = None
         # Hooks invoked once per successful reconnect (see on_reconnected).
@@ -235,6 +241,7 @@ class IbkrAdapter:
             return []
 
         last_prices: dict[int, float] = {}
+        previous_closes: dict[int, float] = {}
         previous_close_set: set[int] = set()
         if stk_positions:
             # Snapshot last prices in one round-trip rather than one per row
@@ -242,17 +249,20 @@ class IbkrAdapter:
             tickers = await self._ib.reqTickersAsync(*contracts)
             last_prices = {c.conId: _coerce_last(t) for c, t in zip(contracts, tickers)}
 
-            # For positions without a live/delayed last (international markets
-            # without paid market-data subs — TSEJ, SBF, IBIS, etc.), fall back
-            # to the most recent daily-bar close via reqHistoricalData. Mark
-            # these so the row renderer can show a "prev close" subtext.
+            # Always fetch previous-session close for ALL contracts (cached by
+            # UTC date to avoid per-poll thrash). Two consumers:
+            #  1. The intraday-change % and hero "Today" P&L need it for every
+            #     row where we also have a live last_price.
+            #  2. Unsubscribed markets (TSEJ, SBF, IBIS, etc.) reuse it as the
+            #     fallback last_price so the row still renders — same behavior
+            #     as before, just sourced from the same cache.
+            previous_closes = await self._fetch_previous_closes_cached(contracts)
             for contract in contracts:
-                if last_prices.get(contract.conId, 0.0) > 0:
-                    continue
-                prev_close = await self._fetch_previous_close(contract)
-                if prev_close is not None and prev_close > 0:
-                    last_prices[contract.conId] = prev_close
-                    previous_close_set.add(contract.conId)
+                if last_prices.get(contract.conId, 0.0) <= 0:
+                    prev_close = previous_closes.get(contract.conId, 0.0)
+                    if prev_close > 0:
+                        last_prices[contract.conId] = prev_close
+                        previous_close_set.add(contract.conId)
 
         # Make sure FxService has live subscriptions for every non-USD currency
         # we're about to render (STK and CASH both contribute). Idempotent.
@@ -269,7 +279,7 @@ class IbkrAdapter:
         out: list[Position] = []
         for ib_pos in stk_positions:
             position = await self._build_position(
-                ib_pos, last_prices, previous_close_set,
+                ib_pos, last_prices, previous_closes, previous_close_set,
             )
             if position is not None:
                 out.append(position)
@@ -277,21 +287,63 @@ class IbkrAdapter:
             out.append(self._build_cash_position(ib_pos))
         return out
 
+    async def _fetch_previous_closes_cached(self, contracts) -> dict[int, float]:
+        """Return {conId: prev-close} for every contract, hitting the per-UTC-date
+        cache before falling back to the concurrent network fetcher.
+
+        Invalidates naturally at UTC midnight — coarse-grained, but the worst
+        case is one venue's session has rolled past midnight UTC and we serve
+        a one-day-stale close until first refresh of the new UTC day. The
+        intraday-% display tolerates this; per-second tick correctness is not
+        the contract."""
+        import datetime as _dt
+
+        today = _dt.datetime.now(_dt.timezone.utc).date()
+        out: dict[int, float] = {}
+        misses: list = []
+        for contract in contracts:
+            conid = int(getattr(contract, "conId", 0))
+            cached = self._previous_close_cache.get(conid)
+            if cached is not None and cached[0] == today:
+                out[conid] = cached[1]
+            else:
+                misses.append(contract)
+        if misses:
+            fresh = await self._fetch_previous_closes(misses)
+            for conid, value in fresh.items():
+                self._previous_close_cache[conid] = (today, value)
+                out[conid] = value
+        return out
+
+    async def _fetch_previous_closes(self, contracts) -> dict[int, float]:
+        if not contracts:
+            return {}
+        semaphore = asyncio.Semaphore(_PREVIOUS_CLOSE_FALLBACK_CONCURRENCY)
+
+        async def _fetch_one(contract) -> tuple[int, float | None]:
+            async with semaphore:
+                conid = int(getattr(contract, "conId"))
+                return conid, await self._fetch_previous_close(contract)
+
+        results = await asyncio.gather(*(_fetch_one(contract) for contract in contracts))
+        return {
+            conid: value for conid, value in results
+            if value is not None and value > 0
+        }
+
     async def _fetch_previous_close(self, contract) -> float | None:
         """Fall back to last-known close for instruments without a live tick.
 
-        Tries IB historical data first (subscription-independent on some
-        exchanges), then Yahoo Finance for venues IB gates entirely
-        (TSEJ, SBF, IBIS, SFB, etc.). Returns None on total failure so the
-        row degrades to — instead of crashing.
+        Tries Yahoo Finance first when we know the venue's symbol convention.
+        This avoids waiting through IB historical-data timeouts on exchanges
+        where the account lacks market-data subscriptions (TSEJ, SBF, IBIS,
+        SFB, etc.). If Yahoo has no mapping/data, try a short IB historical
+        request before degrading the row to — instead of crashing.
         """
-        # First try: IB historical. Subscription-independent on US/HK/some others.
-        ib_close = await self._try_ib_historical(contract)
-        if ib_close is not None:
-            return ib_close
-        # Second try: Yahoo Finance EOD. Covers most international venues
-        # where IB gates data behind paid subscriptions.
-        return await self._try_yahoo(contract)
+        yahoo_close = await self._try_yahoo(contract)
+        if yahoo_close is not None:
+            return yahoo_close
+        return await self._try_ib_historical(contract)
 
     async def _try_ib_historical(self, contract) -> float | None:
         req_hist = getattr(self._ib, "reqHistoricalDataAsync", None)
@@ -306,6 +358,7 @@ class IbkrAdapter:
                 whatToShow="TRADES",
                 useRTH=True,
                 formatDate=1,
+                timeout=_IB_HISTORICAL_TIMEOUT_SECONDS,
             )
         except Exception as exc:
             _LOG.debug(
@@ -341,6 +394,7 @@ class IbkrAdapter:
         self,
         ib_pos,
         last_prices: dict[int, float],
+        previous_closes: dict[int, float] | None = None,
         previous_close_set: set[int] | None = None,
     ) -> Position | None:
         contract = ib_pos.contract
@@ -352,6 +406,7 @@ class IbkrAdapter:
         canonical, name_en, primary_exchange, price_magnifier = resolved
 
         last_price = last_prices.get(contract.conId, 0.0)
+        previous_close = (previous_closes or {}).get(contract.conId, 0.0)
         is_prev_close = bool(
             previous_close_set is not None and contract.conId in previous_close_set
         )
@@ -386,6 +441,7 @@ class IbkrAdapter:
             fx_unavailable=conv.fx_unavailable,
             last_price_is_previous_close=is_prev_close,
             price_magnifier=price_magnifier,
+            previous_close=previous_close,
         )
 
     def _build_cash_position(self, ib_pos) -> Position:

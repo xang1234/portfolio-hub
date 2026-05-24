@@ -175,6 +175,18 @@ body {
   color: var(--ph-text-3); font-size: 12px; font-variant-numeric: tabular-nums;
 }
 
+/* "Today" line under the hero pill — day-of P&L. Hidden by the template
+   when no position has a previous_close (e.g. fresh boot, all CASH). */
+.hero-today {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-top: 6px; font-variant-numeric: tabular-nums;
+}
+.hero-today__label {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--ph-text-3);
+}
+.hero-today__value { font-size: 0.95rem; font-weight: 600; }
+
 /* Allocation bar — proportion of total exposure by exchange / cash. */
 .alloc { margin-top: 14px; max-width: 1180px; }
 .alloc-bar {
@@ -421,6 +433,19 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .pnl-stack .pnl-usd { font-weight: 600; }
 .pnl-stack .pnl-pct {
   font-size: 0.74rem; font-weight: 500; opacity: 0.85; margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Two-line last-price cell: price on top, intraday % under it. Mirrors the
+   .pnl-stack pattern. .chg-pct is suppressed by the row template when the
+   intraday delta isn't computable (no prev close / fallback last_price /
+   cash row), so this only paints when there's a real reading. */
+.last-wrap {
+  display: inline-flex; flex-direction: column; align-items: flex-end;
+  line-height: 1.15;
+}
+.last-wrap .chg-pct {
+  font-size: 0.74rem; font-weight: 500; opacity: 0.9; margin-top: 2px;
   font-variant-numeric: tabular-nums;
 }
 

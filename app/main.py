@@ -146,6 +146,13 @@ def _compute_totals(positions: list[Position]) -> dict:
     Returns a dict the index template can render directly. P&L sign and
     percent are pre-computed here (rather than in the template) so the
     template stays purely declarative.
+
+    `has_intraday` gates the hero's "Today" row: True iff at least one
+    position has both a live last_price and a populated previous_close
+    (i.e. its intraday_change_pct is not None). Without that gate, a
+    fresh boot with no prev-close cache would show "Today $0 (+0.0%)"
+    on a hero that's actually fully populated — misleading flat reading
+    that looks like real flat-day data.
     """
     total_mv_usd = sum(
         p.market_value_usd for p in positions if not p.fx_unavailable
@@ -155,11 +162,28 @@ def _compute_totals(positions: list[Position]) -> dict:
     )
     pnl_pct = (total_pnl_usd / (total_mv_usd - total_pnl_usd) * 100.0
                if (total_mv_usd - total_pnl_usd) != 0 else 0.0)
+
+    intraday_pnl_usd = sum(
+        p.intraday_pnl_usd for p in positions if not p.fx_unavailable
+    )
+    # cost basis at the open ≈ today's MV − today's intraday change in USD
+    intraday_basis_usd = total_mv_usd - intraday_pnl_usd
+    intraday_pnl_pct = (
+        intraday_pnl_usd / intraday_basis_usd * 100.0
+        if intraday_basis_usd > 0 else 0.0
+    )
+    has_intraday = any(
+        p.intraday_change_pct is not None for p in positions
+    )
     return {
         "mv_usd": total_mv_usd,
         "pnl_usd": total_pnl_usd,
         "pnl_pct": pnl_pct,
         "pnl_is_positive": total_pnl_usd >= 0,
+        "intraday_pnl_usd": intraday_pnl_usd,
+        "intraday_pnl_pct": intraday_pnl_pct,
+        "intraday_pnl_is_positive": intraday_pnl_usd >= 0,
+        "has_intraday": has_intraday,
     }
 
 

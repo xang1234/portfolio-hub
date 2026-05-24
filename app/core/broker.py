@@ -58,6 +58,55 @@ class Position:
     # equities (e.g. IQE on LSE) = 100: IB returns last/avgCost in pence,
     # so we divide by 100 to compute mv_native/pnl_native in pounds.
     price_magnifier: int = 1
+    # Previous-session close in native currency. Used to compute the
+    # intraday change % and the hero's "today" P&L. 0.0 when we have no
+    # value (cash rows, IBKR adapter hasn't backfilled yet, or the
+    # historical fetch failed). Default keeps test fixtures compatible.
+    previous_close: float = 0.0
+
+    @property
+    def intraday_change_pct(self) -> float | None:
+        """% change of last_price vs previous_close, in native currency.
+
+        Returns None when:
+          - no previous_close on file,
+          - no live last_price,
+          - last_price was itself filled FROM previous_close (the
+            unsubscribed-market fallback), where a 0 % delta would be
+            misleading noise rather than a real reading.
+        """
+        if self.previous_close <= 0 or self.last_price <= 0:
+            return None
+        if self.last_price_is_previous_close:
+            return None
+        return (self.last_price - self.previous_close) / self.previous_close * 100.0
+
+    @property
+    def intraday_pnl_usd(self) -> float:
+        """Today's contribution to USD P&L: (last - prev_close) * qty / mag,
+        converted to USD by the same FX the row used for mv_usd.
+
+        Returns 0.0 when we can't compute (no prev close, no live tick,
+        FX unavailable, or the prev-close fallback supplied last_price).
+        Backing out FX from mv_usd / mv_native preserves whatever rate the
+        adapter actually applied — including the fallback rate from
+        FxService — so the hero "Today" total is consistent with the row.
+        """
+        if (
+            self.previous_close <= 0
+            or self.last_price <= 0
+            or self.fx_unavailable
+            or self.last_price_is_previous_close
+            or self.market_value_native == 0
+        ):
+            return 0.0
+        fx = self.market_value_usd / self.market_value_native
+        return (
+            (self.last_price - self.previous_close)
+            * self.quantity
+            / self.price_magnifier
+            * fx
+        )
 
 
 @dataclass
