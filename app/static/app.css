@@ -69,7 +69,7 @@
     --ph-surface-3:   #232a3c;
     --ph-border:      #2f384c;
     --ph-border-soft: #1d2434;
-    --ph-text:        #f3f6fb;
+    --ph-text:        #ffffff;
     --ph-text-2:      #b9c2d3;
     --ph-text-3:      #8390a8;
     --ph-accent:      #5b9dff;
@@ -91,7 +91,7 @@
   --ph-surface-3:   #232a3c;
   --ph-border:      #2f384c;
   --ph-border-soft: #1d2434;
-  --ph-text:        #f3f6fb;
+  --ph-text:        #ffffff;
   --ph-text-2:      #b9c2d3;
   --ph-text-3:      #8390a8;
   --ph-accent:      #5b9dff;
@@ -367,13 +367,15 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   background: var(--ph-surface); border: 1px solid var(--ph-border);
   border-radius: var(--ph-r-md);
 }
-/* Search box matches chip height (26px min) and explicitly overrides
-   Pico's default <input> border/box-shadow that was creating the
-   double-border effect. */
+/* Search box is intentionally shorter than the chips (~40% trimmer)
+   per user request — reads as a slim filter strip docked to the right
+   rather than a peer of the segmented controls. Explicit override of
+   Pico's default <input> border/box-shadow keeps the wrapper from
+   showing a double border. */
 .controls__search {
   margin-left: auto;
   display: inline-flex; align-items: center; gap: 6px;
-  min-height: 26px; padding: 0 12px; min-width: 180px;
+  min-height: 16px; padding: 0 10px; min-width: 180px;
   background: var(--ph-surface-3); border: 1px solid transparent;
   border-radius: var(--ph-pill); color: var(--ph-text);
   transition: border-color 0.15s;
@@ -519,11 +521,13 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   text-align: right; white-space: nowrap; width: 1%;
   font-variant-numeric: tabular-nums;
 }
-/* Description column cap — generous (~400px) so typical company names
-   fit on one line, but bounded so a long entry wraps via h-name's
-   overflow-wrap: anywhere rather than pushing the numeric columns off
-   the right edge. */
-.holdings-table .col-name { width: 1%; max-width: 400px; }
+/* Description column cap — generous (1200px, effectively unbounded
+   inside the 1180px container) so company names get all the room they
+   need. width:1% still triggers the "shrink-to-content" idiom in the
+   table-layout: auto algorithm, so short-name rows don't artificially
+   pad. Long names still wrap via h-name's overflow-wrap: anywhere if
+   the actual table width is exhausted. */
+.holdings-table .col-name { width: 1%; max-width: 1200px; }
 .holdings-table tbody td {
   padding: 12px 16px; border-bottom: 1px solid var(--ph-border-soft); vertical-align: middle;
 }
@@ -566,7 +570,15 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .position-row .h-name, .position-row .name-en {
   display: block;
   font-weight: 600; font-size: 14px; line-height: 1.2;
+  color: var(--ph-text);
 }
+/* User-flagged: holding name, quantity, and last price must read as
+   bright white. The td color rule below uses :where() (zero specificity)
+   so individual cells need explicit color to beat Pico's <td> defaults
+   AND survive any future cascade churn. .mv-native and the col-alloc
+   pct keep their lighter colors via more-specific child rules; .pnl-*
+   modifiers on .pnl-stack win because they live on the inner element. */
+.holdings-table tbody td.col-num { color: var(--ph-text); }
 .position-row--cash .h-name, .position-row--cash .name-en {
   color: var(--ph-text-2); font-weight: 500;
 }
