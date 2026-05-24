@@ -77,10 +77,16 @@ class _Event:
 class FakeTicker:
     """Mimics ib_async's Ticker for testing."""
 
-    def __init__(self, contract: FakeContract, last: float | None = None) -> None:
+    def __init__(
+        self,
+        contract: FakeContract,
+        last: float | None = None,
+        marketDataType: int = 1,
+    ) -> None:
         self.contract = contract
         self.last = last
         self.close = None
+        self.marketDataType = marketDataType
         self.updateEvent = _Event()
 
     def marketPrice(self):
@@ -324,7 +330,77 @@ async def test_portfolio_update_refreshes_gated_exchange_live_position(store):
     assert p.last_price == pytest.approx(1100.0)
     assert p.market_value_native == pytest.approx(110_000.0)
     assert p.unrealized_pnl_native == pytest.approx(20_000.0)
+    assert p.last_price_is_broker_mark is True
     assert 14016494 not in fake_ib.req_mkt_data_calls
+
+
+async def test_live_tick_clears_broker_mark_and_delayed_badges(store):
+    from app.adapters.ibkr import IbkrAdapter
+    from app.core.broker import Position
+
+    live = LivePositions()
+    adapter = IbkrAdapter(
+        host="ib-gateway",
+        port=4003,
+        client_id=1,
+        ib_factory=lambda: None,
+        store=store,
+        live_positions=live,
+    )
+    seeded = Position(
+        broker="IBKR", account_id="U1", native_key="76792991",
+        canonical_symbol="700.HK", native_symbol="700",
+        exchange="SEHK", currency="HKD", name_en="TENCENT",
+        asset_class="STK", quantity=100.0, avg_cost=400.0,
+        last_price=420.0, market_value_native=42_000.0,
+        market_value_usd=42_000.0, unrealized_pnl_native=2_000.0,
+        unrealized_pnl_usd=2_000.0, last_price_is_broker_mark=True,
+        last_price_is_delayed=True,
+    )
+    ticker = FakeTicker(_tencent_contract(), last=425.0, marketDataType=1)
+    adapter._streaming[76792991] = (seeded, _tencent_contract(), ticker)
+    live.set_position(seeded)
+
+    adapter._on_ticker_update(ticker)
+
+    p = live.get_all()[0]
+    assert p.last_price == pytest.approx(425.0)
+    assert p.last_price_is_broker_mark is False
+    assert p.last_price_is_delayed is False
+
+
+async def test_delayed_tick_sets_delayed_badge(store):
+    from app.adapters.ibkr import IbkrAdapter
+    from app.core.broker import Position
+
+    live = LivePositions()
+    adapter = IbkrAdapter(
+        host="ib-gateway",
+        port=4003,
+        client_id=1,
+        ib_factory=lambda: None,
+        store=store,
+        live_positions=live,
+    )
+    seeded = Position(
+        broker="IBKR", account_id="U1", native_key="76792991",
+        canonical_symbol="700.HK", native_symbol="700",
+        exchange="SEHK", currency="HKD", name_en="TENCENT",
+        asset_class="STK", quantity=100.0, avg_cost=400.0,
+        last_price=420.0, market_value_native=42_000.0,
+        market_value_usd=42_000.0, unrealized_pnl_native=2_000.0,
+        unrealized_pnl_usd=2_000.0,
+    )
+    ticker = FakeTicker(_tencent_contract(), last=425.0, marketDataType=3)
+    adapter._streaming[76792991] = (seeded, _tencent_contract(), ticker)
+    live.set_position(seeded)
+
+    adapter._on_ticker_update(ticker)
+
+    p = live.get_all()[0]
+    assert p.last_price == pytest.approx(425.0)
+    assert p.last_price_is_delayed is True
+    assert p.last_price_is_broker_mark is False
 
 
 async def test_connect_skips_streaming_subscription_for_historical_only_gated_exchange(store):

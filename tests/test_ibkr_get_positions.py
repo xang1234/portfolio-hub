@@ -55,10 +55,12 @@ class FakeIB:
         positions: list[FakeIBPosition],
         contract_details: dict[int, FakeContractDetails],
         last_prices: dict[int, float] | None = None,
+        market_data_types: dict[int, int] | None = None,
     ) -> None:
         self._positions = positions
         self._contract_details = contract_details
         self._last_prices = last_prices or {}
+        self._market_data_types = market_data_types or {}
         self._connected = False
         self.contract_details_calls: list[int] = []
         self.market_data_type_calls: list[int] = []
@@ -85,11 +87,15 @@ class FakeIB:
 
     async def reqTickersAsync(self, *contracts):  # noqa: N802 — last-price snapshot
         class Tick:
-            def __init__(self, last: float | None) -> None:
+            def __init__(self, last: float | None, market_data_type: int) -> None:
                 self.last = last
+                self.marketDataType = market_data_type
                 self.marketPrice = lambda: last  # ib_async style helper
 
-        return [Tick(self._last_prices.get(c.conId)) for c in contracts]
+        return [
+            Tick(self._last_prices.get(c.conId), self._market_data_types.get(c.conId, 1))
+            for c in contracts
+        ]
 
 
 @pytest.fixture
@@ -169,6 +175,41 @@ async def test_get_positions_returns_one_position_per_stk_holding(store):
     # USD columns deferred to slice 3
     assert p.market_value_usd == 0.0
     assert p.unrealized_pnl_usd == 0.0
+
+
+async def test_get_positions_marks_delayed_snapshot_price(store):
+    contract = FakeContract(conId=76792991, symbol="700", secType="STK", currency="HKD")
+    fake_ib = FakeIB(
+        positions=[
+            FakeIBPosition(
+                account="U7575980",
+                contract=contract,
+                position=100.0,
+                avgCost=400.0,
+            ),
+        ],
+        contract_details={
+            76792991: FakeContractDetails(
+                contract=FakeContract(
+                    conId=76792991,
+                    symbol="700",
+                    secType="STK",
+                    currency="HKD",
+                    primaryExchange="SEHK",
+                ),
+                longName="TENCENT HOLDINGS LTD",
+            ),
+        },
+        last_prices={76792991: 420.0},
+        market_data_types={76792991: 3},
+    )
+    adapter = make_adapter(fake_ib, store)
+    await adapter.connect()
+
+    p = (await adapter.get_positions())[0]
+
+    assert p.last_price == pytest.approx(420.0)
+    assert p.last_price_is_delayed is True
 
 
 async def test_get_positions_filters_out_non_stk_non_cash_secTypes(store):

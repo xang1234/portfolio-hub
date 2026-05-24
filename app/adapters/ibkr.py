@@ -35,6 +35,9 @@ _PREVIOUS_CLOSE_FALLBACK_CONCURRENCY = 8
 _IB_HISTORICAL_PERMISSION_GATED_EXCHANGES = frozenset({
     "AEB",
     "IBIS",
+    "KOSDAQ",
+    "KRX",
+    "KSE",
     "LSE",
     "SBF",
     "SFB",
@@ -278,6 +281,7 @@ class IbkrAdapter:
             return []
 
         last_prices: dict[int, float] = {}
+        last_price_delayed: dict[int, bool] = {}
         previous_closes: dict[int, float] = {}
         portfolio_items = self._portfolio_items_by_conid()
         if stk_positions:
@@ -294,6 +298,10 @@ class IbkrAdapter:
                 tickers = await self._ib.reqTickersAsync(*quote_contracts)
                 last_prices = {
                     c.conId: _coerce_last(t) for c, t in zip(quote_contracts, tickers)
+                }
+                last_price_delayed = {
+                    c.conId: _ticker_is_delayed(t)
+                    for c, t in zip(quote_contracts, tickers)
                 }
 
             # Always fetch previous-session close for ALL contracts (cached by
@@ -323,7 +331,11 @@ class IbkrAdapter:
         out: list[Position] = []
         for ib_pos in stk_positions:
             position = await self._build_position(
-                ib_pos, last_prices, previous_closes, portfolio_items,
+                ib_pos,
+                last_prices,
+                previous_closes,
+                portfolio_items,
+                last_price_delayed,
             )
             if position is not None:
                 out.append(position)
@@ -552,6 +564,7 @@ class IbkrAdapter:
         last_prices: dict[int, float],
         previous_closes: dict[int, float] | None = None,
         portfolio_items: dict[int, object] | None = None,
+        last_price_delayed: dict[int, bool] | None = None,
     ) -> Position | None:
         contract = ib_pos.contract
         native_key = str(contract.conId)
@@ -564,6 +577,8 @@ class IbkrAdapter:
         conid = int(getattr(contract, "conId", 0))
         portfolio_item = (portfolio_items or {}).get(conid)
         last_price = last_prices.get(contract.conId, 0.0)
+        is_delayed = bool((last_price_delayed or {}).get(contract.conId, False))
+        is_broker_mark = False
         previous_close = (previous_closes or {}).get(contract.conId, 0.0)
         is_prev_close = False
         quantity = float(ib_pos.position)
@@ -582,9 +597,12 @@ class IbkrAdapter:
             )
             if portfolio_last is not None:
                 last_price = portfolio_last
+                is_broker_mark = True
+                is_delayed = False
             elif previous_close > 0:
                 last_price = previous_close
                 is_prev_close = True
+                is_delayed = False
 
         # mv/pnl in major currency — see Position.price_magnifier for the
         # divisor convention.
@@ -622,6 +640,8 @@ class IbkrAdapter:
             fx_is_fallback=conv.fx_is_fallback,
             fx_unavailable=conv.fx_unavailable,
             last_price_is_previous_close=is_prev_close,
+            last_price_is_broker_mark=is_broker_mark,
+            last_price_is_delayed=is_delayed,
             price_magnifier=price_magnifier,
             previous_close=previous_close,
         )
@@ -1101,6 +1121,8 @@ class IbkrAdapter:
             fx_is_fallback=conv.fx_is_fallback,
             fx_unavailable=conv.fx_unavailable,
             last_price_is_previous_close=False,
+            last_price_is_broker_mark=False,
+            last_price_is_delayed=_ticker_is_delayed(ticker),
             last_price_is_stale=False,
         )
         self._streaming[conid] = (new_position, contract, ticker)
@@ -1131,6 +1153,12 @@ class IbkrAdapter:
             None,
         )
         if old_position is None or old_position.asset_class != "STK":
+            return
+        if (
+            conid in self._streaming
+            and not old_position.last_price_is_broker_mark
+            and old_position.last_price > 0
+        ):
             return
 
         pm = old_position.price_magnifier
@@ -1170,6 +1198,8 @@ class IbkrAdapter:
             fx_is_fallback=conv.fx_is_fallback,
             fx_unavailable=conv.fx_unavailable,
             last_price_is_previous_close=False,
+            last_price_is_broker_mark=True,
+            last_price_is_delayed=False,
             last_price_is_stale=False,
         )
         if conid in self._streaming:
@@ -1354,6 +1384,14 @@ def _coerce_last(ticker) -> float:
         except Exception:
             pass
     return 0.0
+
+
+def _ticker_is_delayed(ticker) -> bool:
+    try:
+        market_data_type = int(getattr(ticker, "marketDataType", 1))
+    except (TypeError, ValueError):
+        return False
+    return market_data_type in {2, 3, 4}
 
 
 def _to_positive_float(value) -> float | None:

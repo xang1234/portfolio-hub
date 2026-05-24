@@ -241,6 +241,7 @@ async def test_pence_stock_uses_portfolio_value_without_double_dividing(store, f
     assert p.market_value_usd == pytest.approx(1599.87 * 1.35)
     assert p.unrealized_pnl_native == pytest.approx(122.37)
     assert p.unrealized_pnl_usd == pytest.approx(122.37 * 1.35)
+    assert p.last_price_is_broker_mark is True
 
 
 # Default (priceMagnifier=1) leaves everything unchanged --------------------

@@ -250,6 +250,22 @@ def _twse_position():
     return pos, details
 
 
+def _krx_position():
+    contract = FakeContract(
+        conId=852105392, symbol="322310", secType="STK", currency="KRW",
+        exchange="KRX",
+    )
+    details = FakeContractDetails(
+        contract=FakeContract(
+            conId=852105392, symbol="322310", secType="STK", currency="KRW",
+            primaryExchange="KRX",
+        ),
+        longName="ARES CO LTD",
+    )
+    pos = FakeIBPosition(account="U1", contract=contract, position=300.0, avgCost=35240.0)
+    return pos, details
+
+
 @pytest.fixture
 async def store(tmp_path):
     from app.db.store import Store
@@ -387,6 +403,28 @@ async def test_details_exchange_controls_gated_historical_skip(store):
     assert fake_ib.historical_calls == []
 
 
+async def test_korean_exchange_skips_ib_historical_when_yahoo_missing(store):
+    pos, details = _krx_position()
+    fake_ib = FakeIB(positions=[pos], details={852105392: details})
+
+    async def fake_yahoo_fetcher(symbol: str) -> float | None:
+        return None
+
+    from app.adapters.ibkr import IbkrAdapter
+
+    adapter = IbkrAdapter(
+        host="ib-gateway", port=4003, client_id=1,
+        ib_factory=lambda: fake_ib, store=store,
+        yahoo_quote_fetcher=fake_yahoo_fetcher,
+    )
+    await adapter.connect()
+    positions = await adapter.get_positions()
+
+    assert positions[0].last_price == 0.0
+    assert fake_ib.ticker_calls == []
+    assert fake_ib.historical_calls == []
+
+
 async def test_gated_exchange_uses_portfolio_value_when_price_feeds_missing(store):
     """IB's account portfolio feed has broker-valued marketPrice/marketValue
     even when live and historical market data are not permitted."""
@@ -423,6 +461,7 @@ async def test_gated_exchange_uses_portfolio_value_when_price_feeds_missing(stor
     assert positions[0].market_value_native == pytest.approx(220_000.0)
     assert positions[0].unrealized_pnl_native == pytest.approx(20_000.0)
     assert positions[0].last_price_is_previous_close is False
+    assert positions[0].last_price_is_broker_mark is True
     assert fake_ib.ticker_calls == []
     assert fake_ib.historical_calls == []
 

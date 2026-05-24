@@ -50,6 +50,11 @@ class Position:
     # reqHistoricalData (daily-bar close). Template renders a "prev close"
     # subtext so users know the number isn't ticking live.
     last_price_is_previous_close: bool = False
+    # IB portfolio/account valuation feed. This is a real broker mark, but it
+    # updates on the account-update cadence rather than every market tick.
+    last_price_is_broker_mark: bool = False
+    # IB market data type 2/3/4: frozen, delayed, or delayed-frozen.
+    last_price_is_delayed: bool = False
     # Set during the reconnect window (broker dropped, last tick is from
     # before the disconnect). Row template renders ⚠️ + reduced opacity.
     # Naturally clears when the next live tick replaces the Position.

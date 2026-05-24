@@ -424,10 +424,17 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   background: var(--ph-surface-3); color: var(--ph-text-3);
   font-size: 0.66rem; font-weight: 600; line-height: 1.5;
 }
-.position-row .pence-suffix, .position-row .prev-close-note {
+.position-row .pence-suffix, .position-row .prev-close-note,
+.position-row .price-source-note {
   color: var(--ph-text-3); font-size: 0.7rem; margin-left: 0.25rem;
 }
 .position-row .prev-close-note { font-style: italic; }
+.position-row .price-source-note {
+  padding: 0.03rem 0.22rem; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ph-warn) 35%, transparent);
+  color: var(--ph-warn); background: var(--ph-warn-soft);
+  font-weight: 600; white-space: nowrap;
+}
 .position-row .lunch-note { display: block; color: var(--ph-warn); font-size: 0.72rem; margin-top: 0.15rem; }
 .position-row .fx-fallback-badge, .position-row .fx-stale-badge,
 .position-row .price-stale-badge { margin-left: 0.2rem; font-size: 0.8rem; }
