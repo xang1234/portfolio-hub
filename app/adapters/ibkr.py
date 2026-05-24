@@ -2,12 +2,11 @@
 
 Public surface (Broker Protocol):
   - connect / disconnect / is_connected / get_connection_state
-  - get_positions(): STK rows only (CASH still pending), with English name
+  - get_positions(): STK + CASH rows, with English name
     resolution via reqContractDetails, FX conversion to USD via FxService,
     previous-close fallback (Yahoo → fast IB historical) for unsubscribed markets,
     and pence-quoted UK equity normalization via priceMagnifier.
-  - get_account_summary(): minimal stub; expanded later when accountValues()
-    integration lands.
+  - get_account_summary(): per-account NLV/cash/buying-power summary.
 
 Internally, the adapter also runs:
   - A streaming layer that subscribes to reqMktData per position and
@@ -17,7 +16,7 @@ Internally, the adapter also runs:
 
 import asyncio
 import logging
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Callable, Protocol, Sequence
 
 from app.core.broker import AccountSummary, ConnectionState, Position
@@ -58,6 +57,13 @@ from app.core.fills import build_fill_row  # noqa: E402, F401  (re-export)
 # restart usually completes within 1-2 minutes; capping at 60s avoids hammering
 # the gateway while keeping recovery within a few minutes worst-case.
 _DEFAULT_RECONNECT_DELAYS: Sequence[float] = (5.0, 15.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0)
+
+
+@dataclass(frozen=True)
+class _AccountCashValue:
+    account_id: str
+    currency: str
+    amount: float
 
 
 class _IBLike(Protocol):
@@ -278,7 +284,7 @@ class IbkrAdapter:
         stk_positions = [p for p in ib_positions if p.contract.secType == "STK"]
         cash_positions = [p for p in ib_positions if p.contract.secType == "CASH"]
         if not stk_positions and not cash_positions:
-            return []
+            return await self._missing_account_cash_positions([])
 
         last_prices: dict[int, float] = {}
         last_price_delayed: dict[int, bool] = {}
@@ -341,7 +347,57 @@ class IbkrAdapter:
                 out.append(position)
         for ib_pos in cash_positions:
             out.append(self._build_cash_position(ib_pos))
+        out.extend(await self._missing_account_cash_positions(out))
         return out
+
+    async def _missing_account_cash_positions(
+        self, positions: list[Position],
+    ) -> list[Position]:
+        """Backfill account-summary cash when reqPositions omits CASH rows."""
+        accounts_with_cash = {
+            p.account_id for p in positions if p.asset_class == "CASH"
+        }
+        missing: list[Position] = []
+        for cash in await self._account_cash_values():
+            if cash.account_id in accounts_with_cash:
+                continue
+            if cash.amount == 0:
+                continue
+            missing.append(self._build_account_cash_position(cash))
+        return missing
+
+    async def _account_cash_values(self) -> list[_AccountCashValue]:
+        if self._ib is None:
+            return []
+        account_summary = getattr(self._ib, "accountSummaryAsync", None)
+        if not callable(account_summary):
+            return []
+
+        managed = getattr(self._ib, "managedAccounts", None)
+        accounts: list[str] = list(managed()) if callable(managed) else []
+        try:
+            rows = await account_summary()
+        except Exception as exc:
+            _LOG.warning("accountSummaryAsync failed while backfilling cash: %s", exc)
+            return []
+
+        by_account: dict[str, _AccountCashValue] = {}
+        for row in rows:
+            account_id = getattr(row, "account", "")
+            if account_id and account_id not in accounts:
+                accounts.append(account_id)
+            if getattr(row, "tag", "") != "TotalCashValue" or not account_id:
+                continue
+            by_account[account_id] = _AccountCashValue(
+                account_id=account_id,
+                currency=getattr(row, "currency", "") or "USD",
+                amount=_safe_float(getattr(row, "value", "0")),
+            )
+        return [
+            by_account[account_id]
+            for account_id in accounts
+            if account_id in by_account
+        ]
 
     async def _listing_exchanges_for_contracts(self, contracts) -> dict[int, str]:
         out: dict[int, str] = {}
@@ -664,6 +720,33 @@ class IbkrAdapter:
         return Position(
             broker=self.name,
             account_id=ib_pos.account,
+            native_key=currency,
+            canonical_symbol=currency,
+            native_symbol=currency,
+            exchange="",
+            currency=currency,
+            name_en=name,
+            asset_class="CASH",
+            quantity=quantity,
+            avg_cost=1.0,
+            last_price=1.0,
+            market_value_native=quantity,
+            market_value_usd=conv.mv_usd,
+            unrealized_pnl_native=0.0,
+            unrealized_pnl_usd=0.0,
+            fx_is_stale=conv.fx_is_stale,
+            fx_is_fallback=conv.fx_is_fallback,
+            fx_unavailable=conv.fx_unavailable,
+        )
+
+    def _build_account_cash_position(self, cash: _AccountCashValue) -> Position:
+        currency = cash.currency
+        quantity = cash.amount
+        conv = self._convert_to_usd(currency, quantity, 0.0)
+        name = CURRENCY_NAMES.get(currency, currency)
+        return Position(
+            broker=self.name,
+            account_id=cash.account_id,
             native_key=currency,
             canonical_symbol=currency,
             native_symbol=currency,

@@ -52,6 +52,14 @@ class FakeIBPosition:
     avgCost: float
 
 
+@dataclass
+class FakeAccountValue:
+    account: str
+    tag: str
+    value: str
+    currency: str = "USD"
+
+
 class FakeTicker:
     def __init__(self, contract, last=None):
         self.contract = contract
@@ -64,10 +72,12 @@ class FakeTicker:
 
 
 class FakeIB:
-    def __init__(self, positions, details, last_prices=None):
+    def __init__(self, positions, details, last_prices=None, accounts=None, summary_rows=None):
         self._positions = positions
         self._details = details
         self._last_prices = last_prices or {}
+        self._accounts = list(accounts or [])
+        self._summary_rows = list(summary_rows or [])
         self._connected = False
         self.contract_details_calls: list[int] = []
         self.market_data_type_calls: list[int] = []
@@ -87,6 +97,12 @@ class FakeIB:
 
     async def reqPositionsAsync(self):  # noqa: N802
         return self._positions
+
+    def managedAccounts(self):  # noqa: N802
+        return self._accounts
+
+    async def accountSummaryAsync(self):  # noqa: N802
+        return list(self._summary_rows)
 
     async def reqContractDetailsAsync(self, contract):  # noqa: N802
         self.contract_details_calls.append(contract.conId)
@@ -318,3 +334,75 @@ async def test_usd_cash_no_fx_conversion_needed(store):
     assert p.currency == "USD"
     assert p.market_value_usd == pytest.approx(10000.0)
     assert p.fx_unavailable is False
+
+
+async def test_account_summary_cash_is_synthesized_when_reqpositions_has_no_cash(store):
+    """Some IBKR accounts expose idle cash only through TotalCashValue.
+    Holdings still need a CASH row so the all-accounts view includes it."""
+    apple_pos, apple_details = _aapl_stk()
+    fake_ib = FakeIB(
+        positions=[apple_pos],
+        details={265598: apple_details},
+        last_prices={265598: 180.0},
+        accounts=["U1"],
+        summary_rows=[
+            FakeAccountValue("U1", "NetLiquidation", "11800", "USD"),
+            FakeAccountValue("U1", "TotalCashValue", "10000", "USD"),
+            FakeAccountValue("U1", "BuyingPower", "50000", "USD"),
+        ],
+    )
+    fx_svc = FxService(store=store, api_fetcher=None)
+    await fx_svc.start()
+    adapter = await _make_adapter(fake_ib, store, fx_svc)
+
+    positions = await adapter.get_positions()
+
+    cash_rows = [p for p in positions if p.asset_class == "CASH"]
+    assert len(cash_rows) == 1
+    cash = cash_rows[0]
+    assert cash.account_id == "U1"
+    assert cash.currency == "USD"
+    assert cash.quantity == pytest.approx(10000.0)
+    assert cash.market_value_usd == pytest.approx(10000.0)
+
+
+async def test_account_summary_cash_is_synthesized_for_cash_only_account(store):
+    fake_ib = FakeIB(
+        positions=[],
+        details={},
+        accounts=["U_CASH"],
+        summary_rows=[
+            FakeAccountValue("U_CASH", "NetLiquidation", "25000", "USD"),
+            FakeAccountValue("U_CASH", "TotalCashValue", "25000", "USD"),
+        ],
+    )
+    fx_svc = FxService(store=store, api_fetcher=None)
+    await fx_svc.start()
+    adapter = await _make_adapter(fake_ib, store, fx_svc)
+
+    positions = await adapter.get_positions()
+
+    assert len(positions) == 1
+    assert positions[0].asset_class == "CASH"
+    assert positions[0].account_id == "U_CASH"
+    assert positions[0].market_value_usd == pytest.approx(25000.0)
+
+
+async def test_account_summary_cash_does_not_duplicate_reqpositions_cash(store):
+    fake_ib = FakeIB(
+        positions=[_hkd_cash(50000.0)],
+        details={},
+        accounts=["U1"],
+        summary_rows=[
+            FakeAccountValue("U1", "NetLiquidation", "50000", "HKD"),
+            FakeAccountValue("U1", "TotalCashValue", "50000", "HKD"),
+        ],
+    )
+    fx_svc = FxService(store=store, api_fetcher=None)
+    await fx_svc.start()
+    _seed_rate(fx_svc, "HKD", 1 / 7.80)
+    adapter = await _make_adapter(fake_ib, store, fx_svc)
+
+    positions = await adapter.get_positions()
+
+    assert [p.asset_class for p in positions].count("CASH") == 1
