@@ -91,6 +91,12 @@ class Position:
         Backing out FX from mv_usd / mv_native preserves whatever rate the
         adapter actually applied — including the fallback rate from
         FxService — so the hero "Today" total is consistent with the row.
+
+        Note: the back-out uses *today's* FX rate (because mv_usd is
+        computed from today's price × today's rate), so this number
+        conflates today's equity move and today's FX move. Acceptable
+        accounting for a one-day window; consumers who need
+        equity-only attribution should compute it explicitly.
         """
         if (
             self.previous_close <= 0

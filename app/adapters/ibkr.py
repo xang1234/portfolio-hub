@@ -100,6 +100,13 @@ class IbkrAdapter:
         # get_positions every few seconds otherwise spawns N reqHistoricalData
         # calls per cycle — once a day per contract is enough for prev-close.
         self._previous_close_cache: dict[int, tuple[object, float]] = {}
+        # Daily re-seed of previous_close on streaming Positions. _start_streaming
+        # spawns it; _stop_streaming cancels. Without it, a session that survives
+        # past UTC midnight would show intraday % vs the close from the day the
+        # session connected (the in-memory streaming Positions never re-consult
+        # the cache after their initial seed). IBKR's once-a-day restart usually
+        # masks this — defense-in-depth for sessions that don't restart.
+        self._prev_close_refresh_task: asyncio.Task | None = None
         self._connection_state: ConnectionState = ConnectionState.DISCONNECTED
         self._reconnect_task: asyncio.Task | None = None
         # Hooks invoked once per successful reconnect (see on_reconnected).
@@ -784,6 +791,13 @@ class IbkrAdapter:
             update_event = getattr(ticker, "updateEvent", None)
             if update_event is not None:
                 update_event += self._on_ticker_update
+        # Kick off the daily prev_close refresh loop so long-lived sessions
+        # don't show stale intraday %. Idempotent — cancels any prior task.
+        if self._prev_close_refresh_task is not None and not self._prev_close_refresh_task.done():
+            self._prev_close_refresh_task.cancel()
+        self._prev_close_refresh_task = asyncio.create_task(
+            self._refresh_previous_closes_daily()
+        )
 
     async def _contract_for_position(self, position: Position):
         """Recover the Contract for a Position by looking up via conId in IB.
@@ -819,6 +833,57 @@ class IbkrAdapter:
             except Exception:
                 pass
         self._streaming.clear()
+        # Cancel the daily prev_close refresh loop; a fresh _start_streaming
+        # (on reconnect) will spawn a new one.
+        task = self._prev_close_refresh_task
+        self._prev_close_refresh_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _refresh_previous_closes_daily(self) -> None:
+        """Once per UTC day at ~00:05 UTC, re-fetch previous_close for every
+        streaming contract and replace it on the in-memory Position. The
+        cache invalidates on UTC date rollover so this also rebuilds the
+        cache. ~00:05 (not 00:00) so we're firmly past the rollover even
+        with mild clock skew.
+        """
+        import datetime as _dt
+        while True:
+            try:
+                now = _dt.datetime.now(_dt.timezone.utc)
+                next_run = (now + _dt.timedelta(days=1)).replace(
+                    hour=0, minute=5, second=0, microsecond=0,
+                )
+                sleep_s = max(60.0, (next_run - now).total_seconds())
+                await asyncio.sleep(sleep_s)
+                await self._reseed_streaming_previous_closes()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _LOG.warning("prev_close daily refresh raised: %s", exc)
+                # Don't busy-loop on a persistent failure mode (e.g., gateway
+                # mid-reconnect refusing reqHistoricalData) — back off and try
+                # again on the next UTC midnight.
+                await asyncio.sleep(3600)
+
+    async def _reseed_streaming_previous_closes(self) -> None:
+        """Refresh previous_close on every streaming Position. Called by the
+        daily loop and exposed as a method so tests can drive it directly."""
+        if self._ib is None or self._live_positions is None:
+            return
+        contracts = [c for (_p, c, _t) in self._streaming.values()]
+        if not contracts:
+            return
+        fresh = await self._fetch_previous_closes_cached(contracts)
+        for conid, (position, contract, ticker) in list(self._streaming.items()):
+            new_prev = fresh.get(conid)
+            if new_prev is None or new_prev <= 0:
+                continue
+            if new_prev == position.previous_close:
+                continue
+            new_position = replace(position, previous_close=new_prev)
+            self._streaming[conid] = (new_position, contract, ticker)
+            self._live_positions.set_position(new_position)
 
     def _on_ticker_update(self, ticker) -> None:
         """Callback invoked by ib_async on every tick for a subscribed contract."""

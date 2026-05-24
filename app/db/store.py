@@ -335,13 +335,17 @@ class Store:
         """
         since = _utcnow() - timedelta(days=days)
         conn = await self._connection()
+        # ORDER BY includes snapshot_session so the rare case of two sessions
+        # writing the same snapshot_at (e.g., MANUAL + NYSE_CLOSE racing to
+        # the same UTC second) yields deterministic ordering rather than
+        # undefined-order duplicate timestamps.
         if account_id is not None:
             sql = """
                 SELECT snapshot_at, SUM(net_liquidation_usd)
                 FROM equity_snapshots
                 WHERE account_id = ? AND snapshot_at >= ?
                 GROUP BY snapshot_at, snapshot_session
-                ORDER BY snapshot_at ASC
+                ORDER BY snapshot_at ASC, snapshot_session ASC
             """
             params = (account_id, since.isoformat())
         else:
@@ -350,7 +354,7 @@ class Store:
                 FROM equity_snapshots
                 WHERE snapshot_at >= ?
                 GROUP BY snapshot_at, snapshot_session
-                ORDER BY snapshot_at ASC
+                ORDER BY snapshot_at ASC, snapshot_session ASC
             """
             params = (since.isoformat(),)
         async with conn.execute(sql, params) as cursor:

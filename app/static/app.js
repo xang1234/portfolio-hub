@@ -470,7 +470,7 @@
     // cards get a countdown immediately. Attach to `document` (not body)
     // because the body itself may be the swap target — a body-scoped
     // listener disappears with the old body element.
-    function postSwapRehydrate() {
+    function postSwapRehydrate(event) {
         tick();
         flashTickedRows();
         initSort();
@@ -478,7 +478,14 @@
         attachThemeToggle();
         attachSearchHandler();
         applySearchToRows();
-        attachSparkline();
+        // Refresh the sparkline only on swaps that could change its inputs
+        // (full-body swap from chip filters). SSE row deltas tick many times
+        // per minute and don't move equity-snapshot data, so refetching there
+        // is wasteful and causes constant SVG repaints.
+        const swapTarget = event && event.detail && event.detail.target;
+        if (!swapTarget || swapTarget.id !== 'positions-tbody') {
+            attachSparkline();
+        }
         resetTimestampsToNow();
     }
 

@@ -116,21 +116,11 @@ _US_EXTENDED_EXCHANGES: frozenset[str] = frozenset(
 )
 
 
-# Per-state emoji shown in the market rail card. Single source of truth so
-# the rail and any future legend can't drift apart.
-STATE_EMOJI: dict[str, str] = {
-    "OPEN": "🟢",
-    "EXTENDED": "🌒",
-    "LUNCH": "🟡",
-    "CLOSED": "🔴",
-    "HOLIDAY": "⚫",
-}
-
-
-# Text label rendered next to the emoji on each card. Emoji alone is
-# unreliable cross-platform (HKEX yellow LUNCH dot vs orange variant);
-# the label guarantees the state is legible even when an OS swaps the
-# glyph for a placeholder.
+# Text label rendered on each market card. Single source of truth so the
+# rail and any future legend can't drift apart. The redesign uses this
+# label plus a colored state-dot rather than an emoji glyph — emoji alone
+# is unreliable cross-platform (HKEX yellow LUNCH dot vs orange variant)
+# and was the original "meaning carried entirely by emoji" critique.
 STATE_LABEL: dict[str, str] = {
     "OPEN": "Open",
     "EXTENDED": "Pre/post",

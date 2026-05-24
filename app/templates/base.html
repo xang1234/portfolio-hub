@@ -5,6 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="color-scheme" content="light dark">
     <title>{% block title %}portfolio-hub{% endblock %}</title>
+    {# Synchronously apply a stored theme override (set by app.js theme toggle)
+       before stylesheets paint, so users with a non-system preference don't
+       see a one-frame flash of the wrong palette. Default <html data-theme="auto">
+       falls through to the prefers-color-scheme media query. #}
+    <script>(function(){try{var t=localStorage.getItem('portfolio-hub.theme');if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <link rel="stylesheet" href="/static/app.css">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>

@@ -270,12 +270,13 @@ def _render_rows_for_filter(
         templates_env.globals["flag_for_exchange"] = flag_for_exchange
         templates_env.globals["flag_for_currency"] = flag_for_currency
         templates_env.globals["region_color_for_exchange"] = region_color_for_exchange
+    # region_color_for_exchange is on templates_env.globals (above), so the
+    # partial can call it directly without a per-render context key.
     template = templates_env.get_template("partials/holdings_row.html")
     return "".join(
         template.render({
             "position": p,
             "flag_for_exchange": flag_for_exchange,
-            "region_color_for_exchange": region_color_for_exchange,
             "market_by_ib": {},
             "active_account": active_account or "All",
         })
