@@ -517,14 +517,13 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   text-align: right; white-space: nowrap; width: 1%;
   font-variant-numeric: tabular-nums;
 }
-/* Description column: large min-width so the column visibly claims the
-   horizontal space freed by the tightened numeric columns (Qty / Last /
-   MV / MV USD / P&L / Weight, all on 4px padding + smaller font).
-   Without min-width, .col-name would shrink-to-content even when there's
-   slack to its right. max-width caps very-long names at ~the container
-   width so they still wrap via h-name's overflow-wrap: anywhere. */
+/* Description column: min-width 250px so the column reads as a
+   reasonable text column for typical names ("Tencent Holdings Ltd",
+   "Taiwan Semiconductor") without dominating the table. Long names
+   extend the column up to max-width 1200px and wrap via h-name's
+   overflow-wrap: anywhere beyond that. */
 .holdings-table .col-name {
-  width: auto; min-width: 500px; max-width: 1200px;
+  width: auto; min-width: 250px; max-width: 1200px;
 }
 .holdings-table tbody td {
   padding: 12px 16px; border-bottom: 1px solid var(--ph-border-soft); vertical-align: middle;
