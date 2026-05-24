@@ -11,7 +11,7 @@
 
    No markup depends on classes that aren't already in the templates, except the
    small header restructure shipped alongside this change in index.html
-   (.app-bar / .hero / .market-drawer__label).
+   (.app-bar / .hero / .market-rail / .controls / .reconnect-banner).
    ============================================================================ */
 
 /* ---- 1. TOKENS ----------------------------------------------------------- */
@@ -132,7 +132,8 @@ body {
 }
 .app-header > * { max-width: 1180px; margin-inline: auto; }
 
-.app-bar { display: flex; align-items: center; gap: 12px; min-height: 40px; }
+/* flex-wrap lets the reconnect banner wrap to its own row below the bar. */
+.app-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-height: 40px; }
 .app-bar__brand { display: flex; align-items: center; gap: 9px; font-weight: 700; letter-spacing: -0.01em; }
 .app-bar__mark {
   width: 26px; height: 26px; border-radius: 7px; color: #fff; font-weight: 800; font-size: 14px;
@@ -140,6 +141,16 @@ body {
   background: linear-gradient(135deg, var(--ph-accent), #8b5cf6);
 }
 .app-bar__spacer { flex: 1 1 auto; max-width: none; margin: 0; }
+
+/* Square icon-button used by the theme toggle (and any future header tools). */
+.icon-btn {
+  width: 32px; height: 32px; padding: 0; border-radius: 9px;
+  border: 1px solid var(--ph-border); background: var(--ph-surface-2);
+  color: var(--ph-text-2); font-size: 14px; line-height: 1; cursor: pointer;
+  display: inline-grid; place-items: center; transition: 0.15s;
+}
+.icon-btn:hover { color: var(--ph-text); border-color: var(--ph-accent); }
+.icon-btn:focus-visible { outline: 2px solid var(--ph-accent); outline-offset: 2px; }
 
 /* Hero — total exposure is the headline element. */
 .hero { padding: 12px 2px 2px; }
@@ -191,6 +202,36 @@ button.status-badge--retry {
 }
 button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 22%, transparent); }
 
+/* The cluster is transparent so the pill participates in the .app-bar flex
+   row directly and the banner wraps onto its own row beneath. HTMX still
+   targets this element by id for outerHTML swap. */
+.status-cluster { display: contents; }
+
+/* Calm explained banner for the routine daily IBKR restart. Lives in the
+   sticky header so it scrolls with the bar but is full-width and quiet —
+   not an alarm pill. Hidden by default; rendered only by the reconnecting
+   branch of status_badge.html. */
+.reconnect-banner {
+  flex: 1 0 100%; order: 99;
+  display: flex; align-items: center; gap: 10px;
+  margin: 6px 0 0; padding: 9px 14px;
+  background: var(--ph-warn-soft);
+  border: 1px solid color-mix(in srgb, var(--ph-warn) 35%, transparent);
+  border-radius: var(--ph-r-md);
+  font-size: 0.84rem; color: var(--ph-text);
+}
+.reconnect-banner__text strong { font-weight: 600; }
+.reconnect-banner__spinner {
+  width: 12px; height: 12px; border-radius: 50%; flex: 0 0 auto;
+  border: 2px solid color-mix(in srgb, var(--ph-warn) 35%, transparent);
+  border-top-color: var(--ph-warn);
+  animation: ph-spin 0.8s linear infinite;
+}
+@keyframes ph-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .reconnect-banner__spinner { animation: none; }
+}
+
 /* ---- 6. FILTER CONTROLS (segmented) -------------------------------------- */
 /* The chip rows read as one grouped segmented control rather than loose pills. */
 .broker-chips, .account-chips, .asset-chips {
@@ -210,8 +251,34 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .broker-chip--disabled {
   opacity: 0.4; cursor: not-allowed; pointer-events: none;
 }
-/* group the chip rows onto a single controls band */
-.broker-chips, .account-chips, .asset-chips { margin-top: 12px; }
+
+/* Single controls band: chip rows + holdings search. Search pushes to the
+   right via margin-left: auto on .controls__search. */
+.controls {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  margin-top: 12px;
+}
+.controls .broker-chips, .controls .account-chips, .controls .asset-chips {
+  margin: 0;
+}
+.controls__search {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; min-width: 180px; min-height: 32px;
+  background: var(--ph-surface-3); border: 1px solid transparent;
+  border-radius: var(--ph-pill); color: var(--ph-text);
+  transition: border-color 0.15s;
+}
+.controls__search:focus-within { border-color: var(--ph-accent); }
+.controls__search-icon { color: var(--ph-text-3); font-size: 14px; }
+.controls__search input {
+  border: 0; background: transparent; color: var(--ph-text);
+  font: inherit; font-size: 0.85rem; outline: none; width: 100%;
+  padding: 0; margin: 0; min-width: 0;
+}
+.controls__search input::placeholder { color: var(--ph-text-3); }
+/* Strip the search-input's browser-default clear-button on WebKit. */
+.controls__search input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 
 .account-summary {
   margin: 10px 2px 0; font-size: 0.83rem; color: var(--ph-text-2);
@@ -219,34 +286,33 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 }
 .account-summary strong { color: var(--ph-text); }
 
-/* ---- 7. MARKET RAIL (drawer) --------------------------------------------- */
-.market-drawer {
-  margin: 16px 0 14px; border: 1px solid var(--ph-border); border-radius: var(--ph-r-md);
-  background: var(--ph-surface); overflow: hidden;
+/* ---- 7. MARKET RAIL ------------------------------------------------------ */
+/* Always-visible horizontal scrolling rail. Cards stay readable on phones
+   (touch-scroll) and surface a feature that used to be hidden behind a
+   collapsed <details>. State is communicated three ways for robustness:
+   left-edge color stripe, right-side state dot, and explicit text label. */
+.market-section { margin: 16px 0 14px; }
+.market-rail-head { display: flex; align-items: center; padding: 0 2px 6px; }
+.market-rail-head__label {
+  font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--ph-text-3);
 }
-.market-drawer__summary {
-  list-style: none; cursor: pointer; user-select: none;
-  display: flex; align-items: center; gap: 12px; min-height: 46px; padding: 8px 14px;
-  font-size: 0.9rem;
+.market-rail {
+  display: flex; gap: 8px;
+  overflow-x: auto; padding: 2px 2px 6px;
+  scrollbar-width: thin; scrollbar-color: var(--ph-surface-3) transparent;
 }
-.market-drawer__summary::-webkit-details-marker { display: none; }
-.market-drawer__label {
-  font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--ph-text-3);
-}
-.market-drawer__glyphs { display: inline-flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
-.market-drawer__glyph { font-variant-emoji: emoji; font-size: 0.95rem; }
-.market-drawer[open] .market-drawer__summary { border-bottom: 1px solid var(--ph-border-soft); }
-.market-drawer__cards {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 8px; padding: 12px 14px;
-}
+.market-rail::-webkit-scrollbar { height: 6px; }
+.market-rail::-webkit-scrollbar-thumb { background: var(--ph-surface-3); border-radius: 999px; }
+
 .market-card {
-  margin: 0; padding: 11px 13px; border: 1px solid var(--ph-border);
-  border-left: 3px solid var(--ph-text-3); border-radius: var(--ph-r-sm);
+  flex: 0 0 auto; min-width: 158px; max-width: 240px;
+  margin: 0; padding: 10px 12px;
+  border: 1px solid var(--ph-border);
+  border-left: 3px solid var(--ph-text-3);
+  border-radius: var(--ph-r-sm);
   background: var(--ph-surface-2); box-shadow: none;
 }
-/* State accent on the left edge (emoji alone is unreliable across platforms). */
 .market-card--open     { border-left-color: var(--ph-pos);    }
 .market-card--extended { border-left-color: var(--ph-accent); }
 .market-card--lunch    { border-left-color: var(--ph-warn);   }
@@ -259,8 +325,24 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 }
 .market-card__flag { font-size: 1.05rem; }
 .market-card__exchange { font-weight: 600; font-size: 0.92rem; color: var(--ph-text); }
-.market-card__state { margin-left: auto; font-size: 0.95rem; }
-.market-card__transition { margin: 8px 0 0; font-size: 0.82rem; color: var(--ph-text-3); }
+.market-card__state-dot {
+  width: 8px; height: 8px; border-radius: 50%; margin-left: auto; flex: 0 0 auto;
+  background: var(--ph-text-3);
+}
+.market-card__state-dot--open     { background: var(--ph-pos);    box-shadow: 0 0 0 3px var(--ph-pos-soft);    }
+.market-card__state-dot--extended { background: var(--ph-accent); box-shadow: 0 0 0 3px var(--ph-accent-soft); }
+.market-card__state-dot--lunch    { background: var(--ph-warn);   box-shadow: 0 0 0 3px var(--ph-warn-soft);   }
+.market-card__state-dot--closed   { background: var(--ph-text-3); }
+.market-card__state-dot--holiday  { background: var(--ph-text-3); opacity: 0.45; }
+
+.market-card__state-label { font-size: 0.78rem; font-weight: 600; margin-top: 6px; }
+.market-card__state-label--open     { color: var(--ph-pos);    }
+.market-card__state-label--extended { color: var(--ph-accent); }
+.market-card__state-label--lunch    { color: var(--ph-warn);   }
+.market-card__state-label--closed,
+.market-card__state-label--holiday  { color: var(--ph-text-3); }
+
+.market-card__transition { margin: 2px 0 0; font-size: 0.78rem; color: var(--ph-text-3); }
 .market-card__transition time { color: var(--ph-text-2); }
 .market-card__countdown { margin-left: 0.25rem; font-variant-numeric: tabular-nums; }
 
@@ -293,11 +375,16 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .position-row:hover { background: var(--ph-surface-2); }
 
 .position-row .col-name { line-height: 1.3; overflow-wrap: anywhere; }
-/* Flag rendered as a small tile so it reads as a region marker, not loose emoji. */
+/* Flag rendered as a small tile so it reads as a region marker, not loose emoji.
+   The inset box-shadow paints a 3px region-color stripe down the left edge —
+   --region-color is set inline per row by region_color_for_exchange(). Cash
+   and unmapped venues set it to transparent so they fall back to the plain
+   tile look. */
 .position-row .flag {
   display: inline-grid; place-items: center; width: 26px; height: 26px;
   margin-right: 0.5rem; border-radius: 7px; background: var(--ph-surface-3);
   font-size: 0.95rem; vertical-align: middle;
+  box-shadow: inset 3px 0 0 var(--region-color, transparent);
 }
 .position-row .cash-indicator { margin-right: 0.3rem; font-size: 0.95rem; }
 .position-row .name-en { font-weight: 600; font-size: 0.92rem; }
@@ -324,6 +411,30 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .holdings-table .col-pnl { font-weight: 600; }
 .position-row .pnl-na { color: var(--ph-text-3); font-weight: 400; }
 
+/* Two-line P&L cell: value on top, percentage underneath at smaller weight
+   so the eye lands on the absolute dollar number first. The wrapper inherits
+   the pnl-positive / pnl-negative color from the row template. */
+.pnl-stack {
+  display: inline-flex; flex-direction: column; align-items: flex-end;
+  line-height: 1.15;
+}
+.pnl-stack .pnl-usd { font-weight: 600; }
+.pnl-stack .pnl-pct {
+  font-size: 0.74rem; font-weight: 500; opacity: 0.85; margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tick flash — JS in postSwapRehydrate adds the class for ~700ms when a
+   row's data-last-price changes after an SSE swap. Direction-tinted so the
+   eye picks up rallies vs. selloffs at a glance. */
+@keyframes ph-tick-up   { 0% { background: var(--ph-pos-soft); } 100% { background: transparent; } }
+@keyframes ph-tick-down { 0% { background: var(--ph-neg-soft); } 100% { background: transparent; } }
+.position-row.tick-flash-up   { animation: ph-tick-up   0.7s ease-out; }
+.position-row.tick-flash-down { animation: ph-tick-down 0.7s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .position-row.tick-flash-up, .position-row.tick-flash-down { animation: none; }
+}
+
 /* ---- 9. ROW DETAIL MODAL ------------------------------------------------- */
 .row-detail-modal {
   border: 1px solid var(--ph-border); border-radius: var(--ph-r-lg); padding: 0;
@@ -344,13 +455,17 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .row-detail-modal footer { margin-top: 1.1rem; text-align: right; padding: 0; border: 0; background: transparent; }
 
 /* ---- 10. EMPTY STATE ----------------------------------------------------- */
+/* Quiet centered text. The earlier dashed-border card looked broken on a
+   wide screen — empty isn't an error, it's a state to acknowledge calmly. */
 .empty-state {
-  text-align: center; padding: 3rem 1rem; margin: 8px 0; color: var(--ph-text-3);
-  background: var(--ph-surface); border: 1px dashed var(--ph-border);
-  border-radius: var(--ph-r-lg); box-shadow: none;
+  text-align: center; padding: 56px 20px; margin: 24px 0;
+  background: transparent; border: 0; box-shadow: none;
 }
-.empty-state p { margin: 0; font-size: 1rem; font-weight: 600; color: var(--ph-text-2); }
-.empty-state small { display: block; margin-top: 0.5rem; font-size: 0.85rem; opacity: 0.85; }
+.empty-state__glyph { font-size: 40px; margin-bottom: 8px; opacity: 0.7; }
+.empty-state__title {
+  margin: 0 0 6px; font-size: 1rem; font-weight: 600; color: var(--ph-text-2);
+}
+.empty-state__hint { margin: 0; font-size: 0.85rem; color: var(--ph-text-3); }
 
 /* ---- 11. RESPONSIVE ------------------------------------------------------ */
 @media (max-width: 480px) {

@@ -1,20 +1,20 @@
 {# One per-exchange market-status card. Variables:
    - market               : MarketStatus
    - flag                 : pre-resolved country flag emoji (e.g., 🇭🇰)
-   - market_state_emoji   : { state-name → emoji } map (shared with the drawer
-                            glyph row; the route passes it from
-                            app.core.markets.STATE_EMOJI so the two views can
-                            never drift apart).
+   - market_state_label   : { state-name → human label } map (e.g. 'Lunch')
+
    The data-transition-iso attribute lets client JS render a live countdown
-   without any server push. The market-card--<state> class drives the
-   left-edge colour accent (emoji alone is unreliable across platforms).
+   without any server push. State is communicated three ways for robustness
+   (left-edge color stripe, right-side state dot, text label) so meaning
+   survives even if an OS swaps a state glyph for a placeholder.
 #}
 <article class="market-card market-card--{{ market.state.value|lower }}" data-transition-iso="{{ market.next_transition_iso }}">
 <header class="market-card__head">
 <span class="market-card__flag">{{ flag }}</span>
-<span class="market-card__state">{{ market_state_emoji[market.state.value] }}</span>
 <span class="market-card__exchange">{{ market.exchange }}</span>
+<span class="market-card__state-dot market-card__state-dot--{{ market.state.value|lower }}" aria-hidden="true"></span>
 </header>
+<div class="market-card__state-label market-card__state-label--{{ market.state.value|lower }}">{{ market_state_label[market.state.value] }}</div>
 {% if market.next_transition_local %}
 <p class="market-card__transition">
 {{ market.next_transition_label }} at <time>{{ market.next_transition_local }}</time>

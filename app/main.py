@@ -27,7 +27,12 @@ from sse_starlette.sse import EventSourceResponse
 from app.core.broker import Broker, ConnectionState, Position
 from app.core.equity import build_equity_snapshot_row
 from app.core.live_positions import LivePositions, stream_events
-from app.core.markets import STATE_EMOJI, MarketHours, MarketStatus
+from app.core.markets import (
+    STATE_LABEL,
+    MarketHours,
+    MarketStatus,
+    region_color_for_exchange,
+)
 from app.jobs.fills_reconcile import (
     parse_hhmm,
     reconcile_fills,
@@ -240,11 +245,13 @@ def _render_rows_for_filter(
         )
         templates_env.globals["flag_for_exchange"] = flag_for_exchange
         templates_env.globals["flag_for_currency"] = flag_for_currency
+        templates_env.globals["region_color_for_exchange"] = region_color_for_exchange
     template = templates_env.get_template("partials/holdings_row.html")
     return "".join(
         template.render({
             "position": p,
             "flag_for_exchange": flag_for_exchange,
+            "region_color_for_exchange": region_color_for_exchange,
             "market_by_ib": {},
             "active_account": active_account or "All",
         })
@@ -381,6 +388,7 @@ def create_app(
 
     templates.env.globals["flag_for_exchange"] = flag_for_exchange
     templates.env.globals["flag_for_currency"] = flag_for_currency
+    templates.env.globals["region_color_for_exchange"] = region_color_for_exchange
 
     def render_rows(positions: list[Position]) -> str:
         """Legacy unfiltered renderer — preserved for callers that
@@ -609,9 +617,8 @@ def create_app(
                 "totals": totals,
                 "markets": markets,
                 "market_flag": market_flag,
-                "market_state_emoji": STATE_EMOJI,
+                "market_state_label": STATE_LABEL,
                 "market_by_ib": market_by_ib,
-                "drawer_open": False,
                 "account_summaries": account_summaries,
                 "active_account": active_account,
                 "active_asset": active_asset,

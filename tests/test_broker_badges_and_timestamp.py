@@ -56,11 +56,13 @@ def _client(positions, state=ConnectionState.CONNECTED):
 # Broker badges row -----------------------------------------------------
 
 
-def test_broker_badges_row_present():
-    """A nav-level element with every broker's badge must render."""
+def test_broker_filter_row_present():
+    """The header must surface a broker-filter row. The redesign consolidated
+    the old separate status-badges row into the chips row, so a single
+    .broker-chips nav now carries both filtering and broker visibility."""
     response = _client([_pos()]).get("/")
 
-    assert "broker-badges" in response.text
+    assert "broker-chips" in response.text
 
 
 def test_enabled_connected_broker_shows_green_circle():
@@ -71,15 +73,15 @@ def test_enabled_connected_broker_shows_green_circle():
     assert "🟢" in text and "IBKR" in text
 
 
-def test_disabled_brokers_render_as_grayed_badges():
+def test_disabled_brokers_render_as_grayed_chips():
     response = _client([_pos()]).get("/")
 
     text = response.text
-    # All four brokers visible
+    # All four brokers visible (enabled and not-yet-enabled together)
     for b in ("IBKR", "Futu", "Tiger", "Longbridge"):
         assert b in text
-    # The disabled ones carry the same class as the disabled chips
-    assert "broker-badge--disabled" in text
+    # Future brokers carry the disabled-chip modifier
+    assert "broker-chip--disabled" in text
 
 
 def test_disconnected_enabled_broker_shows_red_circle():

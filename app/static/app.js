@@ -14,10 +14,14 @@
     // here — NOT at the point where the feature block begins.
     // ──────────────────────────────────────────────────────────────────
 
-    // Drawer + sort persistence (localStorage keys)
-    const DRAWER_KEY = 'portfolio-hub.drawer';
+    // Sort + theme persistence (localStorage keys)
     const SORT_KEY = 'portfolio-hub.sort';
     const DEFAULT_SORT = { key: 'mv_usd', dir: 'desc' };
+    const THEME_KEY = 'portfolio-hub.theme';
+
+    // Map<row-id, last-seen-price> snapshot taken in htmx:beforeSwap so
+    // afterSwap can diff and tick-flash only the rows whose price changed.
+    let _pendingPriceSnapshot = null;
 
     // Pull-to-refresh threshold (px) — ≥ 50 by review rule so casual
     // scroll-bounce doesn't trigger a reload.
@@ -56,38 +60,99 @@
         });
     }
 
-    // Plan default: collapsed on portrait/narrow, expanded on desktop.
-    // localStorage override wins so a returning user lands in their
-    // last explicit state regardless of orientation. (DRAWER_KEY
-    // declared at the top of the IIFE — see TDZ note.)
-
-    function syncDrawerDefault() {
-        const drawer = document.querySelector('.market-drawer');
-        if (!drawer) return;
-        if (drawer.dataset.userToggled === 'true') return;
-        let stored = null;
-        try { stored = localStorage.getItem(DRAWER_KEY); } catch (e) {}
-        if (stored === 'open') { drawer.open = true; return; }
-        if (stored === 'closed') { drawer.open = false; return; }
-        drawer.open = window.matchMedia(
-            '(min-width: 768px) and (orientation: landscape)'
-        ).matches;
+    // Manual theme toggle. Cycle: auto (no attr override) → dark → light → auto.
+    // The base.html ships <html data-theme="auto">; we override on user intent
+    // and persist so the choice survives reloads. When the user clears their
+    // override (cycles back to auto), we restore the auto value so the CSS
+    // media query takes over again.
+    function readStoredTheme() {
+        try { return localStorage.getItem(THEME_KEY); } catch (e) { return null; }
     }
-
-    function markUserToggled(e) {
-        // Any user toggle disables the responsive default for this load
-        // AND persists the new state to localStorage for next time.
-        e.currentTarget.dataset.userToggled = 'true';
+    function writeStoredTheme(t) {
         try {
-            localStorage.setItem(DRAWER_KEY, e.currentTarget.open ? 'open' : 'closed');
-        } catch (err) { /* ignore */ }
+            if (t === null) localStorage.removeItem(THEME_KEY);
+            else localStorage.setItem(THEME_KEY, t);
+        } catch (e) { /* ignore */ }
+    }
+    function applyTheme(t) {
+        document.documentElement.setAttribute(
+            'data-theme', (t === 'light' || t === 'dark') ? t : 'auto'
+        );
+    }
+    function cycleTheme() {
+        const cur = readStoredTheme();
+        let next;
+        if (cur === null)         next = 'dark';
+        else if (cur === 'dark')  next = 'light';
+        else                      next = null;  // 'light' → null (back to auto)
+        writeStoredTheme(next);
+        applyTheme(next);
+    }
+    function attachThemeToggle() {
+        document.querySelectorAll('[data-theme-toggle]').forEach(btn => {
+            if (btn.dataset.themeBound) return;
+            btn.dataset.themeBound = 'true';
+            btn.addEventListener('click', cycleTheme);
+        });
     }
 
-    function attachDrawerHandlers() {
-        const drawer = document.querySelector('.market-drawer');
-        if (!drawer || drawer.dataset.bound) return;
-        drawer.dataset.bound = 'true';
-        drawer.addEventListener('toggle', markUserToggled);
+    // Holdings client-side search. Hides rows whose name/ticker don't match
+    // the (case-insensitive) substring. Pure DOM — does not touch the SSE
+    // subscription so live ticks keep flowing into hidden rows.
+    function applySearchToRows() {
+        const input = document.querySelector('[data-holdings-search]');
+        if (!input) return;
+        const q = input.value.trim().toLowerCase();
+        const rows = document.querySelectorAll('#positions-tbody .position-row');
+        rows.forEach(r => {
+            if (!q) { r.hidden = false; return; }
+            const name = (r.getAttribute('data-name-en') || '').toLowerCase();
+            const sym = (r.getAttribute('data-canonical-symbol') || '').toLowerCase();
+            r.hidden = !(name.includes(q) || sym.includes(q));
+        });
+    }
+    function attachSearchHandler() {
+        document.querySelectorAll('[data-holdings-search]').forEach(input => {
+            if (input.dataset.searchBound) return;
+            input.dataset.searchBound = 'true';
+            input.addEventListener('input', applySearchToRows);
+        });
+    }
+
+    // Tick-flash for SSE price updates. We snapshot prices in htmx:beforeSwap
+    // (rows are about to be replaced), then in afterSwap compare each new row
+    // to its previous value and animate it green/red briefly. Skips rows that
+    // didn't change and rows seen for the first time. Direction is taken from
+    // the absolute price delta, not the day-change, so an intraday gainer
+    // that ticks down still flashes red on the dip.
+    function snapshotPricesInto(map) {
+        const rows = document.querySelectorAll('#positions-tbody .position-row');
+        rows.forEach(r => {
+            map.set(r.id, parseFloat(r.getAttribute('data-last-price')) || 0);
+        });
+    }
+    function captureBeforeSwap(e) {
+        const tgt = e && e.detail && e.detail.target;
+        if (!tgt || tgt.id !== 'positions-tbody') return;
+        _pendingPriceSnapshot = new Map();
+        snapshotPricesInto(_pendingPriceSnapshot);
+    }
+    function flashTickedRows() {
+        if (!_pendingPriceSnapshot) return;
+        const snap = _pendingPriceSnapshot;
+        _pendingPriceSnapshot = null;
+        const rows = document.querySelectorAll('#positions-tbody .position-row');
+        rows.forEach(r => {
+            const prev = snap.get(r.id);
+            const next = parseFloat(r.getAttribute('data-last-price')) || 0;
+            if (prev == null || !prev || !next || next === prev) return;
+            const cls = next > prev ? 'tick-flash-up' : 'tick-flash-down';
+            r.classList.remove('tick-flash-up', 'tick-flash-down');
+            // Force reflow so the keyframe animation restarts from 0%.
+            void r.offsetWidth;
+            r.classList.add(cls);
+            setTimeout(() => r.classList.remove(cls), 700);
+        });
     }
 
     // Pull-to-refresh ---------------------------------------------
@@ -226,10 +291,11 @@
     }
 
     function onReady() {
+        applyTheme(readStoredTheme());
+        attachThemeToggle();
+        attachSearchHandler();
         tick();
         tickTimestamps();
-        syncDrawerDefault();
-        attachDrawerHandlers();
         initSort();
         attachLongPressHandlers();
     }
@@ -341,12 +407,16 @@
     // listener disappears with the old body element.
     function postSwapRehydrate() {
         tick();
-        attachDrawerHandlers();
+        flashTickedRows();
         initSort();
         attachLongPressHandlers();
+        attachThemeToggle();
+        attachSearchHandler();
+        applySearchToRows();
         resetTimestampsToNow();
     }
 
+    document.addEventListener('htmx:beforeSwap', captureBeforeSwap);
     document.addEventListener('htmx:afterSwap', postSwapRehydrate);
     // htmx-ext-sse fires a separate event on incoming SSE messages.
     // Hook it so SSE-only ticks also refresh the "Updated 0:02 ago".

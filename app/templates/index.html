@@ -8,6 +8,11 @@
 <span class="updated-timestamp"
 data-updated-at="{{ updated_at_iso }}"
 title="Last update">…</span>
+<button type="button"
+class="icon-btn"
+data-theme-toggle
+aria-label="Toggle light / dark theme"
+title="Toggle light / dark theme">◐</button>
 </div>
 {% if totals %}
 <div class="hero">
@@ -33,6 +38,7 @@ title="Unrealized P&amp;L %">{% if totals.pnl_is_positive %}+{% endif %}{{ "{:.2
 {%- if asset and asset != 'All' %}{{ parts.append('asset=' ~ asset) or '' }}{% endif -%}
 /{% if parts %}?{{ parts|join('&') }}{% endif %}
 {%- endmacro %}
+<div class="controls">
 <nav class="broker-chips" aria-label="Filter by broker">
 <a class="broker-chip{% if active_broker == 'All' %} broker-chip--active{% endif %}"
 href="{{ chip_url(account=active_account, asset=active_asset, broker='All') }}"
@@ -72,6 +78,15 @@ hx-get="{{ chip_url(account=active_account, asset=label, broker=active_broker) }
 {% if active_asset == label %}aria-current="page"{% endif %}>{{ label }}</a>
 {% endfor %}
 </nav>
+<label class="controls__search" aria-label="Filter holdings">
+<span class="controls__search-icon" aria-hidden="true">⌕</span>
+<input type="search"
+data-holdings-search
+placeholder="Filter holdings…"
+autocomplete="off"
+spellcheck="false">
+</label>
+</div>
 {% if active_account and active_account != 'All' %}
 {% set selected = (account_summaries | selectattr('account_id', 'equalto', active_account) | list | first) %}
 {% if selected %}
@@ -125,21 +140,18 @@ aria-modal="true">
 </dialog>
 </div>
 {% if markets %}
-<details class="market-drawer" {% if drawer_open %}open{% endif %}>
-<summary class="market-drawer__summary">
-<span class="market-drawer__label">Markets</span>
-<span class="market-drawer__glyphs">
-{% for m in markets %}<span class="market-drawer__glyph">{{ market_flag[m.exchange] }} {{ market_state_emoji[m.state.value] }}</span>{% if not loop.last %} · {% endif %}{% endfor %}
-</span>
-</summary>
-<div class="market-drawer__cards">
+<section class="market-section" aria-label="Market hours">
+<div class="market-rail-head">
+<span class="market-rail-head__label">Markets</span>
+</div>
+<div class="market-rail">
 {% for m in markets %}
 {% with market=m, flag=market_flag[m.exchange] %}
 {% include "partials/market_card.html" %}
 {% endwith %}
 {% endfor %}
 </div>
-</details>
+</section>
 {% endif %}
 {% if positions %}
 <table class="holdings-table">
@@ -177,10 +189,11 @@ sse-swap="snapshot,positions">
 </tbody>
 </table>
 {% else %}
-<article class="empty-state">
-<p>No positions to display yet.</p>
-<small>Make sure IB Gateway is connected and your account has holdings.</small>
-</article>
+<div class="empty-state" role="status">
+<div class="empty-state__glyph" aria-hidden="true">📭</div>
+<p class="empty-state__title">No positions to display yet</p>
+<p class="empty-state__hint">Make sure IB Gateway is connected and your account has holdings.</p>
+</div>
 {% endif %}
 <script>
 (function () {

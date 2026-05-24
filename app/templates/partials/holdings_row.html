@@ -20,7 +20,7 @@ data-row-detail>
 <span class="cash-indicator" title="FX cash balance">💵</span>
 <span class="flag" aria-label="{{ position.currency }}">{{ flag_for_currency(position.currency) }}</span>
 {% elif position.exchange %}
-<span class="flag" aria-label="{{ position.exchange }}">{{ flag_for_exchange(position.exchange) }}</span>
+<span class="flag" style="--region-color: {{ region_color_for_exchange(position.exchange) }}" aria-label="{{ position.exchange }}">{{ flag_for_exchange(position.exchange) }}</span>
 {% endif %}
 <span class="name-en">{{ position.name_en }}</span>
 <span class="native-symbol">
@@ -78,7 +78,11 @@ adds noise without information, so show — instead. #}
 {% if position.asset_class == 'CASH' or position.fx_unavailable or (position.market_value_usd == 0 and position.currency != 'USD') %}
 <span class="pnl-na" title="No USD P&amp;L for this row">—</span>
 {% else %}
-<span class="{% if position.unrealized_pnl_usd >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">{% if position.unrealized_pnl_usd >= 0 %}+{% endif %}{{ "{:,.0f}".format(position.unrealized_pnl_usd) }}</span>
+{% set _cost_usd = position.market_value_usd - position.unrealized_pnl_usd %}
+<div class="pnl-stack {% if position.unrealized_pnl_usd >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
+<span class="pnl-usd">{% if position.unrealized_pnl_usd >= 0 %}+{% endif %}{{ "{:,.0f}".format(position.unrealized_pnl_usd) }}</span>
+{% if _cost_usd > 0 %}{% set _pct = position.unrealized_pnl_usd / _cost_usd * 100 %}<span class="pnl-pct">{% if _pct >= 0 %}+{% endif %}{{ "{:.1f}".format(_pct) }}%</span>{% endif %}
+</div>
 {% endif %}
 </td>
 </tr>

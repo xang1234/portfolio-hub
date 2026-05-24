@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from jinja2 import Environment, FileSystemLoader
 
 from app.core.broker import ConnectionState, Position
-from app.core.markets import STATE_EMOJI, MarketState, MarketStatus
+from app.core.markets import STATE_LABEL, MarketState, MarketStatus
 
 
 TEMPLATES_DIR = "app/templates"
@@ -91,49 +91,57 @@ def _render_card(status: MarketStatus, *, flag: str = "🏳️") -> str:
     env = _env()
     tmpl = env.get_template("partials/market_card.html")
     return tmpl.render(
-        market=status, flag=flag, market_state_emoji=STATE_EMOJI,
+        market=status, flag=flag, market_state_label=STATE_LABEL,
     )
 
 
-def test_open_card_renders_green_emoji_and_close_time():
+def test_open_card_renders_open_label_and_close_time():
     html = _render_card(_open_hkex())
 
-    assert "🟢" in html
+    # State is communicated via text label + colored dot + left-edge stripe
+    # (mockup direction: don't rely on emoji glyph alone for OS portability).
+    assert "market-card__state-label--open" in html
+    assert ">Open<" in html
     assert "HKEX" in html
     assert "Closes" in html
     assert "16:00 HKT" in html
 
 
-def test_lunch_card_renders_yellow_emoji_and_reopen_time():
+def test_lunch_card_renders_lunch_label_and_reopen_time():
     html = _render_card(_lunch_hkex())
 
-    assert "🟡" in html
+    assert "market-card__state-label--lunch" in html
+    assert ">Lunch<" in html
     assert "Reopens" in html
     assert "13:00 HKT" in html
 
 
-def test_extended_pre_card_renders_moon_emoji():
+def test_extended_pre_card_renders_extended_label():
     html = _render_card(_extended_nyse_pre())
 
-    assert "🌒" in html
+    assert "market-card__state-label--extended" in html
+    assert ">Pre/post<" in html
     assert "NYSE" in html
     assert "Pre-market ends" in html
     assert "09:30 ET" in html
 
 
-def test_closed_card_renders_red_emoji_and_next_open():
+def test_closed_card_renders_closed_label_and_next_open():
     html = _render_card(_closed_lse())
 
-    assert "🔴" in html
+    assert "market-card__state-label--closed" in html
+    assert ">Closed<" in html
     assert "Opens" in html
     assert "08:00 GMT" in html
 
 
-def test_holiday_card_renders_black_circle_emoji():
+def test_holiday_card_renders_holiday_label():
     html = _render_card(_holiday_nyse())
 
-    # ⚫ = HOLIDAY (different from 🔴 CLOSED so users can tell at a glance)
-    assert "⚫" in html
+    # HOLIDAY is rendered distinct from CLOSED so users can tell at a glance:
+    # both use the muted dot color, but the text label disambiguates.
+    assert "market-card__state-label--holiday" in html
+    assert ">Holiday<" in html
     assert "NYSE" in html
     assert "Opens" in html
 
@@ -204,17 +212,15 @@ def _make_client(positions):
     return TestClient(app)
 
 
-def test_index_renders_market_drawer_section():
-    """A <details>-based drawer (or aria-equivalent) must exist in the page
-    so users can collapse/expand the market-hours block."""
+def test_index_renders_market_rail_section():
+    """An always-visible market rail must render so users see per-exchange
+    status without an extra click. (The previous <details> drawer hid the
+    feature; the rail is the redesign's replacement.)"""
     client = _make_client(positions=[_stk_hkex_position(), _stk_nyse_position()])
 
     response = client.get("/")
 
-    # Either a <details> element or a class hook; check for both reasonable
-    # implementations (details is the no-JS default; class hook is the
-    # Alpine.js variant).
-    assert "<details" in response.text.lower() or "market-drawer" in response.text.lower()
+    assert "market-rail" in response.text.lower()
 
 
 def test_index_drawer_contains_one_card_per_distinct_stk_exchange():
@@ -297,7 +303,7 @@ def test_index_with_only_cash_positions_renders_no_market_cards():
 
     response = client.get("/")
 
-    # Drawer + per-exchange cards are completely absent when no STK rows
+    # Rail + per-exchange cards are completely absent when no STK rows
     text = response.text
-    assert "market-drawer" not in text
+    assert "market-rail" not in text
     assert "market-card" not in text
