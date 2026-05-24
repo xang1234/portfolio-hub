@@ -12,6 +12,7 @@ adapter connects FxService to its IB instance.
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import logging
 
 import pytest
 
@@ -39,6 +40,7 @@ class _Event:
 @dataclass
 class FakeForexContract:
     pair: str  # e.g. "HKDUSD"
+    conId: int | None = None
 
 
 @dataclass
@@ -77,8 +79,34 @@ class FakeIB:
         return self._tickers_by_pair[pair]
 
 
+class QualifyingIB(FakeIB):
+    def __init__(self) -> None:
+        super().__init__()
+        self.qualify_calls: list[FakeForexContract] = []
+
+    async def qualifyContractsAsync(self, contract):
+        self.qualify_calls.append(contract)
+        return [FakeForexContract(pair=contract.pair, conId=9001)]
+
+
+class PartiallyQualifyingIB(FakeIB):
+    def __init__(self) -> None:
+        super().__init__()
+        self.qualify_calls: list[FakeForexContract] = []
+
+    async def qualifyContractsAsync(self, contract):
+        self.qualify_calls.append(contract)
+        if contract.pair == "KRWUSD":
+            return [None]
+        return [FakeForexContract(pair=contract.pair, conId=9002)]
+
+
 def _forex(currency: str) -> FakeForexContract:
     return FakeForexContract(pair=f"{currency}USD")
+
+
+def _usd_base_forex(currency: str) -> FakeForexContract:
+    return FakeForexContract(pair=f"USD{currency}")
 
 
 @pytest.fixture
@@ -103,6 +131,66 @@ async def test_ensure_subscribed_calls_req_mkt_data_for_each_currency(store):
 
     pairs = {c.pair for c in fake_ib.req_mkt_data_calls}
     assert pairs == {"HKDUSD", "JPYUSD"}
+
+
+def test_ib_forex_pair_uses_market_convention():
+    from app.core.fx import _ib_pair_for
+
+    assert _ib_pair_for("EUR") == ("EURUSD", False)
+    assert _ib_pair_for("GBP") == ("GBPUSD", False)
+    assert _ib_pair_for("JPY") == ("USDJPY", True)
+    assert _ib_pair_for("SGD") == ("USDSGD", True)
+
+
+async def test_ensure_subscribed_qualifies_forex_before_market_data(store):
+    fake_ib = QualifyingIB()
+    svc = FxService(store=store, ib=fake_ib, forex_factory=_forex)
+    await svc.start()
+
+    await svc.ensure_subscribed({"SGD"})
+
+    assert [c.pair for c in fake_ib.qualify_calls] == ["SGDUSD"]
+    assert len(fake_ib.req_mkt_data_calls) == 1
+    assert fake_ib.req_mkt_data_calls[0].pair == "SGDUSD"
+    assert fake_ib.req_mkt_data_calls[0].conId == 9001
+
+
+async def test_ensure_subscribed_skips_unqualified_forex_and_continues(store):
+    fake_ib = PartiallyQualifyingIB()
+    svc = FxService(store=store, ib=fake_ib, forex_factory=_forex)
+    await svc.start()
+
+    await svc.ensure_subscribed({"KRW", "SGD"})
+
+    assert {c.pair for c in fake_ib.qualify_calls} == {"KRWUSD", "SGDUSD"}
+    assert [c.pair for c in fake_ib.req_mkt_data_calls] == ["SGDUSD"]
+
+
+async def test_ensure_subscribed_skips_ib_unsupported_currency_without_qualifying(store):
+    fake_ib = QualifyingIB()
+    svc = FxService(store=store, ib=fake_ib, forex_factory=_forex)
+    await svc.start()
+
+    await svc.ensure_subscribed({"TWD"})
+
+    assert fake_ib.qualify_calls == []
+    assert fake_ib.req_mkt_data_calls == []
+
+
+async def test_ensure_subscribed_logs_unsupported_currency_once(store, caplog):
+    fake_ib = QualifyingIB()
+    svc = FxService(store=store, ib=fake_ib, forex_factory=_forex)
+    await svc.start()
+
+    with caplog.at_level(logging.INFO, logger="app.core.fx"):
+        await svc.ensure_subscribed({"TWD"})
+        await svc.ensure_subscribed({"TWD"})
+
+    messages = [
+        record.message for record in caplog.records
+        if "Skipping FX pair TWDUSD because IB does not support it" in record.message
+    ]
+    assert len(messages) == 1
 
 
 async def test_ensure_subscribed_skips_usd(store):
@@ -158,6 +246,24 @@ async def test_ticker_update_propagates_to_get_rate(store):
     rate = await svc.get_rate("HKD")
     assert rate is not None
     assert rate.rate == pytest.approx(0.1283)
+    assert rate.source == "IB"
+
+
+async def test_usd_base_ticker_update_is_inverted_to_usd_per_native(store):
+    fake_ib = FakeIB()
+    svc = FxService(store=store, ib=fake_ib, forex_factory=_usd_base_forex)
+    await svc.start()
+    await svc.ensure_subscribed({"JPY"})
+
+    ticker = fake_ib.ticker_for("USDJPY")
+    ticker.bid = 150.0
+    ticker.ask = 151.0
+    ticker.updateEvent.emit(ticker)
+
+    rate = await svc.get_rate("JPY")
+    assert rate is not None
+    assert rate.pair == "JPYUSD"
+    assert rate.rate == pytest.approx(1 / 150.5)
     assert rate.source == "IB"
 
 

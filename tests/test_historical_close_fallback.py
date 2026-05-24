@@ -1,6 +1,6 @@
-"""When the live ticker doesn't return a last price (international markets
-without paid market-data subscriptions: TSEJ, SBF, IBIS, KRX...), fall
-back to the daily-bar close via reqHistoricalDataAsync.
+"""When the live ticker doesn't return a last price on venues where IB
+historical data is still usable, fall back to the daily-bar close via
+reqHistoricalDataAsync.
 
 reqHistoricalDataAsync is subscription-independent for end-of-day data
 on most exchanges, so this gives us a usable MV for any holding,
@@ -45,7 +45,7 @@ class FakeBar:
 
 
 class _NullTicker:
-    """A ticker with no live data — like what TSEJ/SBF/IBIS return without a sub."""
+    """A ticker with no live data."""
     def __init__(self, contract):
         self.contract = contract
         self.last = -1.0  # IB's "no data" sentinel
@@ -97,11 +97,11 @@ class FakeIB:
 
 
 def _tse_position():
-    contract = FakeContract(conId=14016494, symbol="6315", secType="STK", currency="JPY")
+    contract = FakeContract(conId=14016494, symbol="6315", secType="STK", currency="HKD")
     details = FakeContractDetails(
         contract=FakeContract(
-            conId=14016494, symbol="6315", secType="STK", currency="JPY",
-            primaryExchange="TSEJ",
+            conId=14016494, symbol="6315", secType="STK", currency="HKD",
+            primaryExchange="SEHK",
         ),
         longName="TOYO ENGINEERING CORP",
     )
@@ -110,11 +110,11 @@ def _tse_position():
 
 
 def _tse_position_with_conid(conid: int, symbol: str):
-    contract = FakeContract(conId=conid, symbol=symbol, secType="STK", currency="JPY")
+    contract = FakeContract(conId=conid, symbol=symbol, secType="STK", currency="HKD")
     details = FakeContractDetails(
         contract=FakeContract(
-            conId=conid, symbol=symbol, secType="STK", currency="JPY",
-            primaryExchange="TSEJ",
+            conId=conid, symbol=symbol, secType="STK", currency="HKD",
+            primaryExchange="SEHK",
         ),
         longName=f"{symbol} CORP",
     )
@@ -140,7 +140,7 @@ async def _no_yahoo(_symbol: str) -> float | None:
 
 
 async def test_uses_historical_close_when_ticker_has_no_last(store):
-    """Japanese stock with no live data → historical close = 1100 JPY → MV = 220,000."""
+    """Stock with no live data → historical close = 1100 HKD → MV = 220,000."""
     pos, details = _tse_position()
     fake_ib = FakeIB(
         positions=[pos],

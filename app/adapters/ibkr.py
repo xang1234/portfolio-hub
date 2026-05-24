@@ -32,6 +32,19 @@ from app.db.store import Store
 _LOG = logging.getLogger(__name__)
 _IB_HISTORICAL_TIMEOUT_SECONDS = 2.0
 _PREVIOUS_CLOSE_FALLBACK_CONCURRENCY = 8
+_IB_HISTORICAL_PERMISSION_GATED_EXCHANGES = frozenset({
+    "AEB",
+    "IBIS",
+    "LSE",
+    "SBF",
+    "SFB",
+    "SGX",
+    "TPEX",
+    "TSEJ",
+    "TWSE",
+})
+_IB_LIVE_QUOTE_PERMISSION_GATED_EXCHANGES = _IB_HISTORICAL_PERMISSION_GATED_EXCHANGES
+_IB_STREAMING_PERMISSION_GATED_EXCHANGES = _IB_HISTORICAL_PERMISSION_GATED_EXCHANGES
 
 # Re-export so existing test imports (and the ibkr adapter's own callers)
 # keep working without having to grep-and-update. The canonical home is
@@ -100,6 +113,9 @@ class IbkrAdapter:
         # get_positions every few seconds otherwise spawns N reqHistoricalData
         # calls per cycle — once a day per contract is enough for prev-close.
         self._previous_close_cache: dict[int, tuple[object, float]] = {}
+        self._previous_close_miss_cache: dict[int, object] = {}
+        self._listing_exchange_cache: dict[int, str] = {}
+        self._contract_details_cache: dict[int, object] = {}
         # Daily re-seed of previous_close on streaming Positions. _start_streaming
         # spawns it; _stop_streaming cancels. Without it, a session that survives
         # past UTC midnight would show intraday % vs the close from the day the
@@ -185,6 +201,9 @@ class IbkrAdapter:
         exec_event = getattr(ib, "execDetailsEvent", None)
         if exec_event is not None and self._store is not None:
             exec_event += self._on_exec_details
+        portfolio_event = getattr(ib, "updatePortfolioEvent", None)
+        if portfolio_event is not None and self._live_positions is not None:
+            portfolio_event += self._on_portfolio_update
         if self._live_positions is not None:
             # If streaming setup fails (e.g. gateway accepted TCP but is still
             # loading accounts, reqPositionsAsync errors), bail out so the
@@ -199,6 +218,11 @@ class IbkrAdapter:
                 if disconnected_event is not None:
                     try:
                         disconnected_event -= self._handle_disconnect
+                    except Exception:
+                        pass
+                if portfolio_event is not None:
+                    try:
+                        portfolio_event -= self._on_portfolio_update
                     except Exception:
                         pass
                 raise
@@ -224,6 +248,12 @@ class IbkrAdapter:
         if self._ib is None:
             self._connection_state = ConnectionState.DISCONNECTED
             return
+        portfolio_event = getattr(self._ib, "updatePortfolioEvent", None)
+        if portfolio_event is not None:
+            try:
+                portfolio_event -= self._on_portfolio_update
+            except Exception:
+                pass
         if self._live_positions is not None:
             self._stop_streaming()
         self._ib.disconnect()
@@ -249,12 +279,22 @@ class IbkrAdapter:
 
         last_prices: dict[int, float] = {}
         previous_closes: dict[int, float] = {}
-        previous_close_set: set[int] = set()
+        portfolio_items = self._portfolio_items_by_conid()
         if stk_positions:
             # Snapshot last prices in one round-trip rather than one per row
             contracts = [p.contract for p in stk_positions]
-            tickers = await self._ib.reqTickersAsync(*contracts)
-            last_prices = {c.conId: _coerce_last(t) for c, t in zip(contracts, tickers)}
+            listing_exchanges = await self._listing_exchanges_for_contracts(contracts)
+            quote_contracts = [
+                c for c in contracts
+                if not _is_live_quote_permission_gated(
+                    listing_exchanges.get(int(getattr(c, "conId", 0)), "")
+                )
+            ]
+            if quote_contracts:
+                tickers = await self._ib.reqTickersAsync(*quote_contracts)
+                last_prices = {
+                    c.conId: _coerce_last(t) for c, t in zip(quote_contracts, tickers)
+                }
 
             # Always fetch previous-session close for ALL contracts (cached by
             # UTC date to avoid per-poll thrash). Two consumers:
@@ -263,13 +303,10 @@ class IbkrAdapter:
             #  2. Unsubscribed markets (TSEJ, SBF, IBIS, etc.) reuse it as the
             #     fallback last_price so the row still renders — same behavior
             #     as before, just sourced from the same cache.
-            previous_closes = await self._fetch_previous_closes_cached(contracts)
-            for contract in contracts:
-                if last_prices.get(contract.conId, 0.0) <= 0:
-                    prev_close = previous_closes.get(contract.conId, 0.0)
-                    if prev_close > 0:
-                        last_prices[contract.conId] = prev_close
-                        previous_close_set.add(contract.conId)
+            previous_closes = await self._fetch_previous_closes_cached(
+                contracts,
+                listing_exchanges=listing_exchanges,
+            )
 
         # Make sure FxService has live subscriptions for every non-USD currency
         # we're about to render (STK and CASH both contribute). Idempotent.
@@ -286,7 +323,7 @@ class IbkrAdapter:
         out: list[Position] = []
         for ib_pos in stk_positions:
             position = await self._build_position(
-                ib_pos, last_prices, previous_closes, previous_close_set,
+                ib_pos, last_prices, previous_closes, portfolio_items,
             )
             if position is not None:
                 out.append(position)
@@ -294,7 +331,87 @@ class IbkrAdapter:
             out.append(self._build_cash_position(ib_pos))
         return out
 
-    async def _fetch_previous_closes_cached(self, contracts) -> dict[int, float]:
+    async def _listing_exchanges_for_contracts(self, contracts) -> dict[int, str]:
+        out: dict[int, str] = {}
+        for contract in contracts:
+            conid = int(getattr(contract, "conId", 0))
+            cached = self._listing_exchange_cache.get(conid)
+            if cached:
+                out[conid] = cached
+                continue
+            exchange = await self._listing_exchange_for_contract(contract)
+            if exchange:
+                self._listing_exchange_cache[conid] = exchange
+                out[conid] = exchange
+        return out
+
+    async def _listing_exchange_for_contract(self, contract) -> str | None:
+        exchange = _first_known_listing_exchange(
+            "",
+            "",
+            getattr(contract, "primaryExchange", ""),
+            getattr(contract, "exchange", ""),
+        )
+        if exchange:
+            return exchange
+        if self._ib is None:
+            return None
+        try:
+            details = await self._contract_details_for_contract(contract)
+        except Exception:
+            return None
+        if details is None:
+            return None
+        details_contract = getattr(details, "contract", None)
+        return _first_known_listing_exchange(
+            getattr(details_contract, "primaryExchange", ""),
+            getattr(details_contract, "exchange", ""),
+            getattr(contract, "primaryExchange", ""),
+            getattr(contract, "exchange", ""),
+        )
+
+    async def _contract_details_for_contract(self, contract):
+        if self._ib is None:
+            return None
+        conid = int(getattr(contract, "conId", 0))
+        cached = self._contract_details_cache.get(conid)
+        if cached is not None:
+            return cached
+        details_list = await self._ib.reqContractDetailsAsync(contract)
+        if not details_list:
+            return None
+        details = details_list[0]
+        self._contract_details_cache[conid] = details
+        return details
+
+    def _portfolio_items_by_conid(self) -> dict[int, object]:
+        if self._ib is None:
+            return {}
+        portfolio = getattr(self._ib, "portfolio", None)
+        if not callable(portfolio):
+            return {}
+        try:
+            items = portfolio()
+        except Exception as exc:
+            _LOG.debug("Failed to read IB portfolio cache: %s", exc)
+            return {}
+        out: dict[int, object] = {}
+        for item in items:
+            contract = getattr(item, "contract", None)
+            try:
+                conid = int(getattr(contract, "conId", 0))
+            except (TypeError, ValueError):
+                continue
+            if conid:
+                out[conid] = item
+        return out
+
+    async def _fetch_previous_closes_cached(
+        self,
+        contracts,
+        *,
+        listing_exchanges: dict[int, str] | None = None,
+    ) -> dict[int, float]:
         """Return {conId: prev-close} for every contract, hitting the per-UTC-date
         cache before falling back to the concurrent network fetcher.
 
@@ -313,16 +430,31 @@ class IbkrAdapter:
             cached = self._previous_close_cache.get(conid)
             if cached is not None and cached[0] == today:
                 out[conid] = cached[1]
+            elif self._previous_close_miss_cache.get(conid) == today:
+                continue
             else:
                 misses.append(contract)
         if misses:
-            fresh = await self._fetch_previous_closes(misses)
+            fresh = await self._fetch_previous_closes(
+                misses,
+                listing_exchanges=listing_exchanges,
+            )
             for conid, value in fresh.items():
                 self._previous_close_cache[conid] = (today, value)
+                self._previous_close_miss_cache.pop(conid, None)
                 out[conid] = value
+            for contract in misses:
+                conid = int(getattr(contract, "conId", 0))
+                if conid not in fresh:
+                    self._previous_close_miss_cache[conid] = today
         return out
 
-    async def _fetch_previous_closes(self, contracts) -> dict[int, float]:
+    async def _fetch_previous_closes(
+        self,
+        contracts,
+        *,
+        listing_exchanges: dict[int, str] | None = None,
+    ) -> dict[int, float]:
         if not contracts:
             return {}
         semaphore = asyncio.Semaphore(_PREVIOUS_CLOSE_FALLBACK_CONCURRENCY)
@@ -330,7 +462,10 @@ class IbkrAdapter:
         async def _fetch_one(contract) -> tuple[int, float | None]:
             async with semaphore:
                 conid = int(getattr(contract, "conId"))
-                return conid, await self._fetch_previous_close(contract)
+                return conid, await self._fetch_previous_close(
+                    contract,
+                    listing_exchange=(listing_exchanges or {}).get(conid),
+                )
 
         results = await asyncio.gather(*(_fetch_one(contract) for contract in contracts))
         return {
@@ -338,18 +473,27 @@ class IbkrAdapter:
             if value is not None and value > 0
         }
 
-    async def _fetch_previous_close(self, contract) -> float | None:
+    async def _fetch_previous_close(
+        self,
+        contract,
+        *,
+        listing_exchange: str | None = None,
+    ) -> float | None:
         """Fall back to last-known close for instruments without a live tick.
 
         Tries Yahoo Finance first when we know the venue's symbol convention.
         This avoids waiting through IB historical-data timeouts on exchanges
         where the account lacks market-data subscriptions (TSEJ, SBF, IBIS,
-        SFB, etc.). If Yahoo has no mapping/data, try a short IB historical
-        request before degrading the row to — instead of crashing.
+        SFB, etc.). If Yahoo has no mapping/data for those known gated
+        venues, degrade the row without asking IB for historical bars. Other
+        venues still get a short IB historical request before we give up.
         """
-        yahoo_close = await self._try_yahoo(contract)
+        yahoo_close = await self._try_yahoo(contract, listing_exchange=listing_exchange)
         if yahoo_close is not None:
             return yahoo_close
+        exchange = listing_exchange or getattr(contract, "primaryExchange", "") or getattr(contract, "exchange", "")
+        if _is_historical_permission_gated(exchange):
+            return None
         return await self._try_ib_historical(contract)
 
     async def _try_ib_historical(self, contract) -> float | None:
@@ -380,10 +524,15 @@ class IbkrAdapter:
         value = float(getattr(bars[-1], "close", 0.0))
         return value if value > 0 else None
 
-    async def _try_yahoo(self, contract) -> float | None:
+    async def _try_yahoo(
+        self,
+        contract,
+        *,
+        listing_exchange: str | None = None,
+    ) -> float | None:
         if self._yahoo_quote_fetcher is None:
             return None
-        exchange = getattr(contract, "primaryExchange", "") or getattr(contract, "exchange", "")
+        exchange = listing_exchange or getattr(contract, "primaryExchange", "") or getattr(contract, "exchange", "")
         symbol = yahoo_symbol_for(getattr(contract, "symbol", ""), exchange)
         if symbol is None:
             return None
@@ -402,7 +551,7 @@ class IbkrAdapter:
         ib_pos,
         last_prices: dict[int, float],
         previous_closes: dict[int, float] | None = None,
-        previous_close_set: set[int] | None = None,
+        portfolio_items: dict[int, object] | None = None,
     ) -> Position | None:
         contract = ib_pos.contract
         native_key = str(contract.conId)
@@ -412,17 +561,43 @@ class IbkrAdapter:
             return None
         canonical, name_en, primary_exchange, price_magnifier = resolved
 
+        conid = int(getattr(contract, "conId", 0))
+        portfolio_item = (portfolio_items or {}).get(conid)
         last_price = last_prices.get(contract.conId, 0.0)
         previous_close = (previous_closes or {}).get(contract.conId, 0.0)
-        is_prev_close = bool(
-            previous_close_set is not None and contract.conId in previous_close_set
-        )
+        is_prev_close = False
         quantity = float(ib_pos.position)
-        avg_cost = float(ib_pos.avgCost)
+        portfolio_avg_cost = _portfolio_average_cost(portfolio_item, price_magnifier)
+        avg_cost = (
+            portfolio_avg_cost
+            if portfolio_avg_cost is not None
+            else float(ib_pos.avgCost)
+        )
+
+        if last_price <= 0:
+            portfolio_last = _portfolio_display_price(
+                portfolio_item,
+                price_magnifier,
+                quantity=quantity,
+            )
+            if portfolio_last is not None:
+                last_price = portfolio_last
+            elif previous_close > 0:
+                last_price = previous_close
+                is_prev_close = True
+
         # mv/pnl in major currency — see Position.price_magnifier for the
         # divisor convention.
-        mv_native = quantity * last_price / price_magnifier
-        pnl_native = (last_price - avg_cost) * quantity / price_magnifier
+        portfolio_mv = _portfolio_market_value(portfolio_item)
+        portfolio_pnl = _portfolio_unrealized_pnl(portfolio_item)
+        if last_prices.get(contract.conId, 0.0) <= 0 and portfolio_mv is not None:
+            mv_native = portfolio_mv
+        else:
+            mv_native = quantity * last_price / price_magnifier
+        if last_prices.get(contract.conId, 0.0) <= 0 and portfolio_pnl is not None:
+            pnl_native = portfolio_pnl
+        else:
+            pnl_native = (last_price - avg_cost) * quantity / price_magnifier
 
         conv = self._convert_to_usd(contract.currency, mv_native, pnl_native)
 
@@ -569,12 +744,11 @@ class IbkrAdapter:
             # caller falls back to its own contract reference.
             return None
 
-        details_list = await self._ib.reqContractDetailsAsync(contract)
-        if not details_list:
+        details = await self._contract_details_for_contract(contract)
+        if details is None:
             _LOG.warning("reqContractDetails returned no details for conId=%s", native_key)
             return None
 
-        details = details_list[0]
         details_contract = getattr(details, "contract", None)
         primary_exchange = _first_known_listing_exchange(
             getattr(details_contract, "primaryExchange", ""),
@@ -785,6 +959,8 @@ class IbkrAdapter:
             contract = await self._contract_for_position(position)
             if contract is None:
                 continue
+            if _is_streaming_permission_gated(position.exchange):
+                continue
             ticker = self._ib.reqMktData(contract, "", False, False)
             self._streaming[conid] = (position, contract, ticker)
             # Subscribe to update events; ib_async fires this on every tick
@@ -928,6 +1104,77 @@ class IbkrAdapter:
             last_price_is_stale=False,
         )
         self._streaming[conid] = (new_position, contract, ticker)
+        self._live_positions.set_position(new_position)
+
+    def _on_portfolio_update(self, item) -> None:
+        """Refresh live rows from IB's account-level portfolio valuation feed.
+
+        This feed is important for exchanges where `reqMktData`/historical
+        calls require permissions the account does not have. IB still values
+        the held position in the account portfolio; use that as a broker
+        mark instead of rendering the row as unknown.
+        """
+        if self._live_positions is None:
+            return
+        contract = getattr(item, "contract", None)
+        try:
+            conid = int(getattr(contract, "conId", 0))
+        except (TypeError, ValueError):
+            return
+        if not conid:
+            return
+        old_position = next(
+            (
+                p for p in self._live_positions.get_all()
+                if p.broker == self.name and p.native_key == str(conid)
+            ),
+            None,
+        )
+        if old_position is None or old_position.asset_class != "STK":
+            return
+
+        pm = old_position.price_magnifier
+        last_price = _portfolio_display_price(
+            item,
+            pm,
+            quantity=old_position.quantity,
+        )
+        mv_native = _portfolio_market_value(item)
+        pnl_native = _portfolio_unrealized_pnl(item)
+        avg_cost = _portfolio_average_cost(item, pm)
+        if last_price is None:
+            last_price = old_position.last_price
+        if mv_native is None:
+            mv_native = old_position.market_value_native
+        if pnl_native is None:
+            pnl_native = old_position.unrealized_pnl_native
+        if avg_cost is None:
+            avg_cost = old_position.avg_cost
+        if (
+            last_price == old_position.last_price
+            and mv_native == old_position.market_value_native
+            and pnl_native == old_position.unrealized_pnl_native
+            and avg_cost == old_position.avg_cost
+        ):
+            return
+        conv = self._convert_to_usd(old_position.currency, mv_native, pnl_native)
+        new_position = replace(
+            old_position,
+            avg_cost=avg_cost,
+            last_price=last_price,
+            market_value_native=mv_native,
+            unrealized_pnl_native=pnl_native,
+            market_value_usd=conv.mv_usd,
+            unrealized_pnl_usd=conv.pnl_usd,
+            fx_is_stale=conv.fx_is_stale,
+            fx_is_fallback=conv.fx_is_fallback,
+            fx_unavailable=conv.fx_unavailable,
+            last_price_is_previous_close=False,
+            last_price_is_stale=False,
+        )
+        if conid in self._streaming:
+            _old_stream_position, stream_contract, ticker = self._streaming[conid]
+            self._streaming[conid] = (new_position, stream_contract, ticker)
         self._live_positions.set_position(new_position)
 
     # ---- fills (slice 11) ---------------------------------------------------
@@ -1122,6 +1369,69 @@ def _to_positive_float(value) -> float | None:
     if f <= 0:           # IB's "no quote" sentinel is -1.0; 0 also unusable
         return None
     return f
+
+
+def _to_finite_float(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if f != f:
+        return None
+    return f
+
+
+def _portfolio_display_price(
+    item,
+    price_magnifier: int,
+    *,
+    quantity: float | None = None,
+) -> float | None:
+    if item is None:
+        return None
+    price = _to_positive_float(getattr(item, "marketPrice", None))
+    if price is None and quantity not in (None, 0):
+        market_value = _portfolio_market_value(item)
+        if market_value is not None:
+            price = abs(market_value / float(quantity))
+    if price is None:
+        return None
+    return price * price_magnifier
+
+
+def _portfolio_average_cost(item, price_magnifier: int) -> float | None:
+    if item is None:
+        return None
+    value = _to_positive_float(getattr(item, "averageCost", None))
+    if value is None:
+        return None
+    return value * price_magnifier
+
+
+def _portfolio_market_value(item) -> float | None:
+    if item is None:
+        return None
+    return _to_finite_float(getattr(item, "marketValue", None))
+
+
+def _portfolio_unrealized_pnl(item) -> float | None:
+    if item is None:
+        return None
+    return _to_finite_float(getattr(item, "unrealizedPNL", None))
+
+
+def _is_historical_permission_gated(exchange: str | None) -> bool:
+    return str(exchange or "").strip() in _IB_HISTORICAL_PERMISSION_GATED_EXCHANGES
+
+
+def _is_live_quote_permission_gated(exchange: str | None) -> bool:
+    return str(exchange or "").strip() in _IB_LIVE_QUOTE_PERMISSION_GATED_EXCHANGES
+
+
+def _is_streaming_permission_gated(exchange: str | None) -> bool:
+    return str(exchange or "").strip() in _IB_STREAMING_PERMISSION_GATED_EXCHANGES
 
 
 def _first_known_listing_exchange(

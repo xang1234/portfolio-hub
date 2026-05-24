@@ -29,13 +29,31 @@ def _pair_for(currency: str) -> str:
     return f"{currency}USD"
 
 
+_IB_DIRECT_USD_TERMS: frozenset[str] = frozenset({"AUD", "EUR", "GBP"})
+_IB_FX_UNSUPPORTED_CURRENCIES: frozenset[str] = frozenset({"TWD"})
+
+
+def _ib_pair_for(currency: str) -> tuple[str, bool]:
+    """Return the IB Forex pair plus whether its quote needs inversion.
+
+    Internally we store USD-per-native rates (`JPYUSD` = USD per JPY). IBKR
+    expects market-convention FX pairs, which are USD-base for most non-major
+    currencies (`USDJPY`, `USDSGD`, ...). Those subscriptions quote native per
+    USD, so the tick price must be inverted before storing.
+    """
+    if currency in _IB_DIRECT_USD_TERMS:
+        return _pair_for(currency), False
+    return f"USD{currency}", True
+
+
 def _default_forex_factory(currency: str) -> Any:
     """Build an ib_async Forex contract for `currency` against USD.
 
     Imported lazily so tests don't need ib_async on PYTHONPATH.
     """
     from ib_async import Forex
-    return Forex(_pair_for(currency))
+    pair, _invert = _ib_pair_for(currency)
+    return Forex(pair)
 
 
 _API_URL = "https://open.er-api.com/v6/latest/USD"
@@ -194,6 +212,7 @@ class FxService:
         # Active IB subscriptions, keyed by currency. Membership doubles as
         # the "already subscribed" guard for ensure_subscribed().
         self._tickers: dict[str, Any] = {}
+        self._ib_unsupported_currencies_seen: set[str] = set()
         self._lock = asyncio.Lock()
         self._api_task: asyncio.Task | None = None
 
@@ -351,13 +370,49 @@ class FxService:
             if currency in self._tickers:
                 continue
             validate_currency(currency)
-            contract = self._forex_factory(currency)
-            ticker = self._ib.reqMktData(contract, "", False, False)
-            ticker.updateEvent += self._make_ticker_handler(currency)
+            if currency in _IB_FX_UNSUPPORTED_CURRENCIES:
+                if currency not in self._ib_unsupported_currencies_seen:
+                    _LOG.info(
+                        "Skipping FX pair %sUSD because IB does not support it on IDEALPRO",
+                        currency,
+                    )
+                    self._ib_unsupported_currencies_seen.add(currency)
+                continue
+            contract = await self._qualify_forex_contract(self._forex_factory(currency))
+            if contract is None:
+                _LOG.warning("Skipping FX pair %sUSD because IB could not qualify it", currency)
+                continue
+            try:
+                ticker = self._ib.reqMktData(contract, "", False, False)
+            except Exception as exc:
+                _LOG.warning("Failed to subscribe to FX pair %sUSD via IB: %s", currency, exc)
+                continue
+            ticker.updateEvent += self._make_ticker_handler(
+                currency,
+                invert=_contract_quotes_usd_base(currency, contract),
+            )
             self._tickers[currency] = ticker
             _LOG.info("Subscribed to FX pair %sUSD via IB", currency)
 
-    def _make_ticker_handler(self, currency: str):
+    async def _qualify_forex_contract(self, contract: Any) -> Any | None:
+        """Populate conId before subscribing; ib_async hashes live subscriptions by contract."""
+        if self._ib is None:
+            return contract
+        qualify = getattr(self._ib, "qualifyContractsAsync", None)
+        if not callable(qualify):
+            return contract
+        try:
+            qualified = await qualify(contract)
+        except Exception as exc:
+            _LOG.warning(
+                "Failed to qualify FX contract %s: %s",
+                getattr(contract, "pair", contract),
+                exc,
+            )
+            return None
+        return qualified[0] if qualified and qualified[0] is not None else None
+
+    def _make_ticker_handler(self, currency: str, *, invert: bool = False):
         """Return a closure that handles updateEvent for the given currency.
 
         The in-memory cache is updated synchronously so the next get_rate()
@@ -368,6 +423,8 @@ class FxService:
             price = _extract_forex_price(ticker)
             if price is None:
                 return
+            if invert:
+                price = 1.0 / price
             # IB Forex tickers fire often during quiet periods with the same
             # midpoint repeating. Skip both the in-memory write and the DB
             # upsert when nothing actually changed.
@@ -474,3 +531,13 @@ def _extract_forex_price(ticker) -> float | None:
         if mp is not None and mp > 0:
             return float(mp)
     return None
+
+
+def _contract_quotes_usd_base(currency: str, contract: Any) -> bool:
+    pair = getattr(contract, "pair", "")
+    if not pair:
+        symbol = getattr(contract, "symbol", "")
+        quote_currency = getattr(contract, "currency", "")
+        if symbol and quote_currency:
+            pair = f"{symbol}{quote_currency}"
+    return pair == f"USD{currency}"
