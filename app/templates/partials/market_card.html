@@ -9,7 +9,7 @@
    survives even if an OS swaps a state glyph for a placeholder.
 #}
 <article class="market-card market-card--{{ market.state.value|lower }}" data-transition-iso="{{ market.next_transition_iso }}">
-<header class="market-card__head">
+<div class="market-card__head">
 <span class="market-card__flag">{{ flag }}</span>
 <span class="market-card__exchange">{{ market.exchange }}</span>
 <span class="market-card__state-dot market-card__state-dot--{{ market.state.value|lower }}" aria-hidden="true"></span>

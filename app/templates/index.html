@@ -9,6 +9,11 @@
 <div class="app-bar">
 <span class="app-bar__brand"><span class="app-bar__mark">P</span>Portfolio Hub<small>· multi-broker</small></span>
 <span class="app-bar__spacer"></span>
+<span class="conn-dots" aria-label="Broker connections">
+{% for b in all_known_brokers %}
+<span class="cdot{% if b in enabled_brokers %}{% if b == 'IBKR' and state != 'connected' %} off{% else %} on{% endif %}{% else %} idle{% endif %}" title="{{ b }}{% if b not in enabled_brokers %} — not enabled{% endif %}"></span>
+{% endfor %}
+</span>
 {% include "partials/status_badge.html" %}
 <span class="updated-timestamp"
 data-updated-at="{{ updated_at_iso }}"
@@ -91,6 +96,7 @@ title="{{ b }} adapter not enabled yet">{{ b }}</span>
 {% endfor %}
 </nav>
 {% if account_summaries and account_summaries|length > 1 %}
+<span class="ctl-label">Account</span>
 <nav class="account-chips" aria-label="Filter by account">
 <a class="account-chip{% if active_account == 'All' %} account-chip--active{% endif %}"
 href="{{ chip_url(account='All', asset=active_asset, broker=active_broker) }}"
@@ -183,13 +189,13 @@ Qty <span class="sort-indicator" data-sort-indicator></span>
 Last <span class="sort-indicator" data-sort-indicator></span>
 </th>
 <th class="col-num sortable" data-sort-key="mv_native" role="button" tabindex="0">
-Market Value <span class="sort-indicator" data-sort-indicator></span>
+Mkt value (native) <span class="sort-indicator" data-sort-indicator></span>
 </th>
 <th class="col-num sortable" data-sort-key="mv_usd" role="button" tabindex="0">
 Market Value USD <span class="sort-indicator" data-sort-indicator></span>
 </th>
 <th class="col-num sortable col-pnl" data-sort-key="pnl_usd" role="button" tabindex="0">
-P&amp;L USD <span class="sort-indicator" data-sort-indicator></span>
+Unrealized P&amp;L <span class="sort-indicator" data-sort-indicator></span>
 </th>
 <th class="col-num col-alloc" title="Share of total exposure (USD)">Weight</th>
 </tr>
@@ -272,8 +278,21 @@ sse-swap="snapshot,positions">
         + _esc(label) + ' ' + pct + '%</span>';
     }).join('');
   }
-  buildAllocation();
-  document.body.addEventListener('htmx:afterSwap', buildAllocation);
+  function applySearch() {
+    var s = document.getElementById('ph-search'); if (!s) return;
+    var q = s.value.trim().toLowerCase();
+    rows().forEach(function (r) {
+      var hay = ((r.getAttribute('data-name-en') || '') + ' '
+        + (r.getAttribute('data-canonical-symbol') || '')).toLowerCase();
+      r.style.display = (!q || hay.indexOf(q) >= 0) ? '' : 'none';
+    });
+  }
+  function wireSearch() {
+    var s = document.getElementById('ph-search');
+    if (s && !s._phWired) { s._phWired = true; s.addEventListener('input', applySearch); }
+  }
+  build(); wireSearch();
+  document.body.addEventListener('htmx:afterSwap', function () { build(); wireSearch(); applySearch(); });
 })();
 </script>
 {% endblock %}
