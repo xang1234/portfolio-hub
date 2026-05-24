@@ -10,6 +10,13 @@
        see a one-frame flash of the wrong palette. Default <html data-theme="auto">
        falls through to the prefers-color-scheme media query. #}
     <script>(function(){try{var t=localStorage.getItem('portfolio-hub.theme');if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+    {# Inter for UI, IBM Plex Mono for ticker pills. Loaded ahead of Pico
+       + app.css so the @font-face declarations are in the cascade before
+       any element claims them. display=swap so the system fallback shows
+       text while the WOFF2s arrive. #}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <link rel="stylesheet" href="/static/app.css">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>

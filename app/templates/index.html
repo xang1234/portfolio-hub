@@ -1,8 +1,13 @@
 {% extends "base.html" %}
 
 {% block header %}
+{# Slim sticky bar: brand + status + timestamp + theme toggle. The hero, the
+   market rail, and the chip controls all live in {% block content %} below
+   so they scroll out of view normally (matching the mockup's layout). The
+   reconnect banner still wraps onto its own row inside .app-bar via
+   .reconnect-banner { flex: 1 0 100%; }. #}
 <div class="app-bar">
-<span class="app-bar__brand"><span class="app-bar__mark">P</span>Portfolio Hub</span>
+<span class="app-bar__brand"><span class="app-bar__mark">P</span>Portfolio Hub<small>· multi-broker</small></span>
 <span class="app-bar__spacer"></span>
 {% include "partials/status_badge.html" %}
 <span class="updated-timestamp"
@@ -14,8 +19,11 @@ data-theme-toggle
 aria-label="Toggle light / dark theme"
 title="Toggle light / dark theme">◐</button>
 </div>
+{% endblock %}
+
+{% block content %}
 {% if totals %}
-<div class="hero">
+<section class="hero">
 <span class="hero-label">Total exposure (USD)</span>
 <div class="hero-row">
 <span class="total-mv-usd" title="Total market value (USD)">${{ "{:,.0f}".format(totals.mv_usd) }}</span>
@@ -38,9 +46,25 @@ title="Day-of P&amp;L (USD)">{% if totals.intraday_pnl_is_positive %}+{% endif %
 <div class="alloc-bar" id="ph-alloc-bar"></div>
 <div class="alloc-legend" id="ph-alloc-legend"></div>
 </div>
-</div>
+</section>
 {% endif %}
-{# Build a helper for chip URLs that preserves the OTHER filter values. #}
+{% if markets %}
+<section class="market-section" aria-label="Market hours">
+<div class="market-rail-head">
+<span class="market-rail-head__label">Markets</span>
+</div>
+<div class="market-rail">
+{% for m in markets %}
+{% with market=m, flag=market_flag[m.exchange] %}
+{% include "partials/market_card.html" %}
+{% endwith %}
+{% endfor %}
+</div>
+</section>
+{% endif %}
+{# Helper that preserves the OTHER filter values when building chip URLs.
+   Defined inside the content block so it can be invoked by the chips
+   below (Jinja macros are block-scoped). #}
 {% macro chip_url(account=None, asset=None, broker=None) -%}
 {%- set parts = [] -%}
 {%- if broker and broker != 'All' %}{{ parts.append('broker=' ~ broker) or '' }}{% endif -%}
@@ -108,9 +132,6 @@ Account <strong>{{ selected.account_id }}</strong>
 </p>
 {% endif %}
 {% endif %}
-{% endblock %}
-
-{% block content %}
 <div x-data="{ row: null }"
 @row-detail.window="row = $event.detail"
 @keydown.escape.window="row = null">
@@ -149,21 +170,8 @@ aria-modal="true">
 </template>
 </dialog>
 </div>
-{% if markets %}
-<section class="market-section" aria-label="Market hours">
-<div class="market-rail-head">
-<span class="market-rail-head__label">Markets</span>
-</div>
-<div class="market-rail">
-{% for m in markets %}
-{% with market=m, flag=market_flag[m.exchange] %}
-{% include "partials/market_card.html" %}
-{% endwith %}
-{% endfor %}
-</div>
-</section>
-{% endif %}
 {% if positions %}
+<div class="holdings-card">
 <table class="holdings-table">
 <thead>
 <tr>
@@ -198,6 +206,7 @@ sse-swap="snapshot,positions">
 {% endfor %}
 </tbody>
 </table>
+</div>
 {% else %}
 <div class="empty-state" role="status">
 <div class="empty-state__glyph" aria-hidden="true">📭</div>

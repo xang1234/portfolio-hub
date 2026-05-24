@@ -16,15 +16,17 @@ data-name-en="{{ position.name_en }}"
 data-asset-class="{{ position.asset_class }}"
 data-row-detail>
 <td class="col-name">
+<div class="holding">
 {% if position.asset_class == 'CASH' %}
 <span class="cash-indicator" title="FX cash balance">💵</span>
 <span class="flag" aria-label="{{ position.currency }}">{{ flag_for_currency(position.currency) }}</span>
 {% elif position.exchange %}
 <span class="flag" style="--region-color: {{ region_color_for_exchange(position.exchange) }}" aria-label="{{ position.exchange }}">{{ flag_for_exchange(position.exchange) }}</span>
 {% endif %}
-<span class="name-en">{{ position.name_en }}</span>
-<span class="native-symbol">
-{{ position.native_symbol }}
+<div class="holding__body">
+<span class="name-en h-name">{{ position.name_en }}</span>
+<span class="native-symbol h-sub">
+<span class="tickpill">{{ position.native_symbol }}</span>
 {% if position.fx_is_fallback %}
 <span class="fx-fallback-badge" title="FX rate from public-API fallback">📡</span>
 {% endif %}
@@ -39,6 +41,8 @@ title="The price shown is the most recent tick from before this midday session p
 (lunch break{% if row_market.next_transition_local %} — reopens {{ row_market.next_transition_local }}{% endif %})
 </span>
 {% endif %}
+</div>
+</div>
 </td>
 <td class="col-num">{{ "{:,.0f}".format(position.quantity) }}</td>
 <td class="col-num">
@@ -56,14 +60,14 @@ adds noise without information, so show — instead. #}
 </td>
 <td class="col-num">
 {% if position.market_value_native > 0 %}
-{{ "{:,.0f}".format(position.market_value_native) }}<small class="currency">{{ position.currency }}</small>
+<span class="mv-native">{{ "{:,.0f}".format(position.market_value_native) }}<small class="currency">{{ position.currency }}</small></span>
 {% else %}—{% endif %}
 </td>
 <td class="col-num">
 {% if position.fx_unavailable or (position.market_value_usd == 0 and position.currency != 'USD') %}
 —
 {% else %}
-{{ "{:,.0f}".format(position.market_value_usd) }}
+<span class="mv-usd">{{ "{:,.0f}".format(position.market_value_usd) }}</span>
 {% if position.fx_is_stale %}
 <span class="fx-stale-badge" title="FX rate is stale">⚠️</span>
 {% endif %}

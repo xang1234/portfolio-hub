@@ -9,45 +9,61 @@
         (dialog, buttons, container) inherit the theme.
      3. Restyles the existing component classes into a finance dashboard.
 
-   No markup depends on classes that aren't already in the templates, except the
-   small header restructure shipped alongside this change in index.html
-   (.app-bar / .hero / .market-rail / .controls / .reconnect-banner).
+   Visual-fidelity pass aligns sizes, spacing, and fonts to the interactive
+   mockup at portfolio-hub-redesign.html: Inter for UI + IBM Plex Mono for
+   ticker pills, slim sticky bar with hero/rail/controls as separate cards
+   below, radial-gradient body background, sticky table thead.
    ============================================================================ */
 
 /* ---- 1. TOKENS ----------------------------------------------------------- */
 :root {
-  --ph-bg:          #f4f6fb;
+  --ph-bg:          #f4f6fa;
+  --ph-bg-grad:     radial-gradient(1200px 600px at 80% -10%, #e9eefb 0%, #f4f6fa 60%);
   --ph-surface:     #ffffff;
-  --ph-surface-2:   #f1f4f9;
-  --ph-surface-3:   #e7edf6;
+  --ph-surface-2:   #f7f9fc;
+  --ph-surface-3:   #eef2f8;
   --ph-border:      #e2e8f0;
-  --ph-border-soft: #edf1f7;
+  --ph-border-soft: #edf1f6;
   --ph-text:        #0e1626;
-  --ph-text-2:      #49546a;
+  --ph-text-2:      #475067;
   --ph-text-3:      #8a93a6;
   --ph-accent:      #2f6fed;
   --ph-accent-soft: rgba(47, 111, 237, 0.10);
   --ph-pos:         #0f9d6c;
-  --ph-pos-soft:    rgba(15, 157, 108, 0.12);
+  --ph-pos-soft:    rgba(15, 157, 108, 0.10);
   --ph-neg:         #d83a52;
-  --ph-neg-soft:    rgba(216, 58, 82, 0.12);
+  --ph-neg-soft:    rgba(216, 58, 82, 0.10);
   --ph-warn:        #b7791f;
-  --ph-warn-soft:   rgba(183, 121, 31, 0.14);
-  --ph-shadow:      0 8px 28px rgba(20, 30, 55, 0.08);
+  --ph-warn-soft:   rgba(183, 121, 31, 0.12);
+  --ph-shadow:      0 10px 30px rgba(20, 30, 55, 0.10);
 
   --ph-r-sm: 8px;
   --ph-r-md: 12px;
   --ph-r-lg: 16px;
   --ph-pill: 999px;
 
-  --ph-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto,
-             Helvetica, Arial, sans-serif;
+  /* Inter is loaded via Google Fonts in base.html; the system fallbacks
+     keep the layout legible during the WOFF2 fetch (display=swap). IBM
+     Plex Mono fronts ui-monospace for the ticker pill so a missed CDN
+     still renders a tabular face on every OS. */
+  --ph-font-ui:   "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+                  Roboto, Helvetica, Arial, sans-serif;
+  --ph-font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo,
+                  Consolas, "Liberation Mono", monospace;
+  /* Back-compat alias; older selectors below still reference --ph-font. */
+  --ph-font: var(--ph-font-ui);
+
+  /* Slim sticky-bar height used as the offset for the holdings thead so
+     thead docks just under the bar without overlap. Adjust here if the
+     bar height changes. */
+  --ph-app-bar-height: 52px;
 }
 
 /* Dark tokens — applied for auto (system dark) and explicit dark theme. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --ph-bg:          #0a0d13;
+    --ph-bg-grad:     radial-gradient(1200px 600px at 80% -10%, #131a2b 0%, #0a0d13 60%);
     --ph-surface:     #11151f;
     --ph-surface-2:   #161b27;
     --ph-surface-3:   #1c2330;
@@ -69,6 +85,7 @@
 }
 [data-theme="dark"] {
   --ph-bg:          #0a0d13;
+  --ph-bg-grad:     radial-gradient(1200px 600px at 80% -10%, #131a2b 0%, #0a0d13 60%);
   --ph-surface:     #11151f;
   --ph-surface-2:   #161b27;
   --ph-surface-3:   #1c2330;
@@ -100,18 +117,27 @@
   --pico-primary:              var(--ph-accent);
   --pico-border-radius:        var(--ph-r-md);
   --pico-spacing:              1rem;
-  --pico-font-family:          var(--ph-font);
+  --pico-font-family:          var(--ph-font-ui);
 }
 
 /* ---- 3. GLOBAL ----------------------------------------------------------- */
 body {
   background: var(--ph-bg);
+  background-image: var(--ph-bg-grad);
+  background-attachment: fixed;
   color: var(--ph-text);
-  font-family: var(--ph-font);
+  font-family: var(--ph-font-ui);
+  font-size: 15px;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 .container { max-width: 1180px; }
-.tnum, .totals, .holdings-table { font-variant-numeric: tabular-nums; }
+.tnum, .totals, .holdings-table {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+.mono { font-family: var(--ph-font-mono); }
 
 .pull-refresh-indicator {
   position: fixed; top: 0; left: 50%; transform: translateX(-50%);
@@ -121,50 +147,76 @@ body {
 }
 .pull-refresh-indicator--visible { opacity: 1; }
 
-/* ---- 4. HEADER: app bar + hero ------------------------------------------- */
+/* ---- 4. HEADER: slim app bar -------------------------------------------- */
+/* The sticky surface now holds only the bar (brand + status + updated +
+   theme toggle). The hero, market rail, and controls render as content-
+   level cards below, matching the mockup's layout. */
 .app-header {
   position: sticky; top: 0; z-index: 100;
-  padding: 10px 20px 12px;
-  background: color-mix(in srgb, var(--ph-surface) 86%, transparent);
-  backdrop-filter: saturate(150%) blur(12px);
-  -webkit-backdrop-filter: saturate(150%) blur(12px);
+  padding: 10px 20px;
+  background: color-mix(in srgb, var(--ph-surface) 88%, transparent);
+  backdrop-filter: saturate(140%) blur(12px);
+  -webkit-backdrop-filter: saturate(140%) blur(12px);
   border-bottom: 1px solid var(--ph-border-soft);
 }
 .app-header > * { max-width: 1180px; margin-inline: auto; }
 
 /* flex-wrap lets the reconnect banner wrap to its own row below the bar. */
-.app-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-height: 40px; }
-.app-bar__brand { display: flex; align-items: center; gap: 9px; font-weight: 700; letter-spacing: -0.01em; }
+.app-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; min-height: 32px; }
+.app-bar__brand {
+  display: flex; align-items: center; gap: 10px;
+  font-weight: 700; letter-spacing: -0.01em; font-size: 15px;
+}
+.app-bar__brand small {
+  color: var(--ph-text-3); font-weight: 500; font-size: 12px; margin-left: 2px;
+}
 .app-bar__mark {
-  width: 26px; height: 26px; border-radius: 7px; color: #fff; font-weight: 800; font-size: 14px;
+  width: 28px; height: 28px; border-radius: 8px; color: #fff;
+  font-weight: 800; font-size: 15px;
   display: grid; place-items: center;
   background: linear-gradient(135deg, var(--ph-accent), #8b5cf6);
+  box-shadow: 0 4px 12px rgba(91, 157, 255, 0.4);
 }
 .app-bar__spacer { flex: 1 1 auto; max-width: none; margin: 0; }
 
 /* Square icon-button used by the theme toggle (and any future header tools). */
 .icon-btn {
-  width: 32px; height: 32px; padding: 0; border-radius: 9px;
+  width: 34px; height: 34px; padding: 0; border-radius: 10px;
   border: 1px solid var(--ph-border); background: var(--ph-surface-2);
-  color: var(--ph-text-2); font-size: 14px; line-height: 1; cursor: pointer;
+  color: var(--ph-text-2); font-size: 15px; line-height: 1; cursor: pointer;
   display: inline-grid; place-items: center; transition: 0.15s;
 }
 .icon-btn:hover { color: var(--ph-text); border-color: var(--ph-accent); }
 .icon-btn:focus-visible { outline: 2px solid var(--ph-accent); outline-offset: 2px; }
 
-/* Hero — total exposure is the headline element. */
-.hero { padding: 12px 2px 2px; }
+/* Content layout — same max-width as the header, with breathing room. */
+main.container { padding-top: 18px; padding-bottom: 64px; }
+main.container > * + * { margin-top: 18px; }
+
+/* ---- 4b. HERO CARD ------------------------------------------------------ */
+/* Hero is the headline element. The subtle vertical gradient + border +
+   shadow give it the trading-dashboard depth the mockup carries. */
+.hero {
+  display: block;
+  background: linear-gradient(180deg, var(--ph-surface-2), var(--ph-surface));
+  border: 1px solid var(--ph-border); border-radius: var(--ph-r-lg);
+  padding: 22px 24px; box-shadow: var(--ph-shadow);
+}
 .hero-label {
-  display: block; font-size: 11.5px; font-weight: 600; letter-spacing: 0.07em;
+  display: block; font-size: 12.5px; font-weight: 600; letter-spacing: 0.08em;
   text-transform: uppercase; color: var(--ph-text-3);
 }
-.hero-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 16px; margin-top: 4px; }
-.total-mv-usd {
-  font-size: clamp(2rem, 5vw, 2.9rem); font-weight: 700; letter-spacing: -0.02em; line-height: 1.05;
+.hero-row {
+  display: flex; align-items: baseline; flex-wrap: wrap;
+  gap: 6px 16px; margin-top: 6px;
 }
-.total-pnl-usd, .total-pnl-pct { font-weight: 600; font-size: 1rem; }
+.total-mv-usd {
+  font-size: clamp(2.1rem, 5vw, 3.1rem); font-weight: 700;
+  letter-spacing: -0.02em; line-height: 1;
+}
+.total-pnl-usd, .total-pnl-pct { font-weight: 600; font-size: 15px; }
 .total-pnl-usd {
-  padding: 4px 10px; border-radius: var(--ph-pill);
+  padding: 6px 12px; border-radius: var(--ph-pill);
 }
 .total-pnl-usd.pnl-positive { background: var(--ph-pos-soft); }
 .total-pnl-usd.pnl-negative { background: var(--ph-neg-soft); }
@@ -191,32 +243,37 @@ body {
 /* "Today" line under the hero pill — day-of P&L. Hidden by the template
    when no position has a previous_close (e.g. fresh boot, all CASH). */
 .hero-today {
-  display: flex; align-items: baseline; gap: 8px;
-  margin-top: 6px; font-variant-numeric: tabular-nums;
+  display: flex; align-items: baseline; gap: 10px;
+  margin-top: 8px; font-variant-numeric: tabular-nums;
 }
 .hero-today__label {
-  font-size: 11px; font-weight: 600; letter-spacing: 0.07em;
+  font-size: 11.5px; font-weight: 600; letter-spacing: 0.06em;
   text-transform: uppercase; color: var(--ph-text-3);
 }
-.hero-today__value { font-size: 0.95rem; font-weight: 600; }
+.hero-today__value { font-size: 13.5px; font-weight: 600; color: var(--ph-text-2); }
+.hero-today__value.pnl-positive { color: var(--ph-pos); }
+.hero-today__value.pnl-negative { color: var(--ph-neg); }
 
 /* Allocation bar — proportion of total exposure by exchange / cash. */
-.alloc { margin-top: 14px; max-width: 1180px; }
+.alloc { margin-top: 20px; }
 .alloc-bar {
-  display: flex; height: 9px; border-radius: var(--ph-pill);
+  display: flex; height: 10px; border-radius: var(--ph-pill);
   overflow: hidden; background: var(--ph-surface-3);
 }
 .alloc-seg { height: 100%; }
 .alloc-seg + .alloc-seg { box-shadow: -1px 0 0 var(--ph-bg); }
-.alloc-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 12px; color: var(--ph-text-2); }
-.alloc-it { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
-.alloc-sw { width: 9px; height: 9px; border-radius: 3px; }
+.alloc-legend {
+  display: flex; flex-wrap: wrap; gap: 7px 14px;
+  margin-top: 12px; font-size: 12.5px; color: var(--ph-text-2);
+}
+.alloc-it { display: inline-flex; align-items: center; gap: 7px; font-variant-numeric: tabular-nums; }
+.alloc-sw { width: 10px; height: 10px; border-radius: 3px; }
 
 /* ---- 5. CONNECTION STATUS BADGE ------------------------------------------ */
 .status-badge {
   display: inline-flex; align-items: center; gap: 0.35rem;
   padding: 0.2rem 0.6rem; border-radius: var(--ph-pill);
-  font-size: 0.82rem; font-weight: 600; line-height: 1.3; border: 1px solid transparent;
+  font-size: 12.5px; font-weight: 600; line-height: 1.3; border: 1px solid transparent;
 }
 .status-badge--connected    { background: var(--ph-pos-soft);  color: var(--ph-pos);  }
 .status-badge--reconnecting  { background: var(--ph-warn-soft); color: var(--ph-warn); }
@@ -243,12 +300,12 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   background: var(--ph-warn-soft);
   border: 1px solid color-mix(in srgb, var(--ph-warn) 35%, transparent);
   border-radius: var(--ph-r-md);
-  font-size: 0.84rem; color: var(--ph-text);
+  font-size: 13px; color: var(--ph-text);
 }
 .reconnect-banner__text strong { font-weight: 600; }
 .reconnect-banner__spinner {
-  width: 12px; height: 12px; border-radius: 50%; flex: 0 0 auto;
-  border: 2px solid color-mix(in srgb, var(--ph-warn) 35%, transparent);
+  width: 13px; height: 13px; border-radius: 50%; flex: 0 0 auto;
+  border: 2px solid color-mix(in srgb, var(--ph-warn) 40%, transparent);
   border-top-color: var(--ph-warn);
   animation: ph-spin 0.8s linear infinite;
 }
@@ -257,39 +314,55 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   .reconnect-banner__spinner { animation: none; }
 }
 
-/* ---- 6. FILTER CONTROLS (segmented) -------------------------------------- */
+/* ---- 6. FILTER CONTROLS (segmented inside a card) ------------------------ */
 /* The chip rows read as one grouped segmented control rather than loose pills. */
 .broker-chips, .account-chips, .asset-chips {
-  display: inline-flex; flex-wrap: wrap; gap: 3px; margin: 10px 8px 0 0; padding: 3px;
+  display: inline-flex; flex-wrap: wrap; gap: 2px;
+  margin: 0; padding: 3px;
   background: var(--ph-surface-3); border-radius: var(--ph-pill); vertical-align: middle;
 }
 .broker-chip, .account-chip, .asset-chip {
-  display: inline-flex; align-items: center; min-height: 30px; padding: 0.25rem 0.8rem;
-  border: 0; border-radius: var(--ph-pill); background: transparent; color: var(--ph-text-2);
-  font-size: 0.83rem; font-weight: 600; text-decoration: none; cursor: pointer; transition: 0.15s;
+  display: inline-flex; align-items: center; min-height: 32px;
+  padding: 0.3rem 0.9rem; border: 0; border-radius: var(--ph-pill);
+  background: transparent; color: var(--ph-text-2);
+  font-size: 13px; font-weight: 600;
+  text-decoration: none; cursor: pointer; transition: 0.15s;
 }
 .broker-chip:hover, .account-chip:hover, .asset-chip:hover { color: var(--ph-text); }
 .broker-chip--active, .account-chip--active, .asset-chip--active {
   background: var(--ph-surface); color: var(--ph-text);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 1px 3px rgba(20, 30, 55, 0.12);
+}
+/* In dark mode the same shadow color disappears against the dark surface;
+   bump opacity so the active pill still reads as raised. */
+[data-theme="dark"] .broker-chip--active,
+[data-theme="dark"] .account-chip--active,
+[data-theme="dark"] .asset-chip--active {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .broker-chip--active,
+  :root:not([data-theme="light"]) .account-chip--active,
+  :root:not([data-theme="light"]) .asset-chip--active {
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  }
 }
 .broker-chip--disabled {
   opacity: 0.4; cursor: not-allowed; pointer-events: none;
 }
 
-/* Single controls band: chip rows + holdings search. Search pushes to the
-   right via margin-left: auto on .controls__search. */
+/* Single controls band, now framed as a card to match the mockup. The
+   search input pushes to the right via margin-left: auto. */
 .controls {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
-  margin-top: 12px;
-}
-.controls .broker-chips, .controls .account-chips, .controls .asset-chips {
-  margin: 0;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 12px;
+  background: var(--ph-surface); border: 1px solid var(--ph-border);
+  border-radius: var(--ph-r-md);
 }
 .controls__search {
   margin-left: auto;
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 5px 12px; min-width: 180px; min-height: 32px;
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 14px; min-width: 180px;
   background: var(--ph-surface-3); border: 1px solid transparent;
   border-radius: var(--ph-pill); color: var(--ph-text);
   transition: border-color 0.15s;
@@ -298,7 +371,7 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .controls__search-icon { color: var(--ph-text-3); font-size: 14px; }
 .controls__search input {
   border: 0; background: transparent; color: var(--ph-text);
-  font: inherit; font-size: 0.85rem; outline: none; width: 100%;
+  font: inherit; font-size: 13.5px; outline: none; width: 100%;
   padding: 0; margin: 0; min-width: 0;
 }
 .controls__search input::placeholder { color: var(--ph-text-3); }
@@ -306,7 +379,7 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .controls__search input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 
 .account-summary {
-  margin: 10px 2px 0; font-size: 0.83rem; color: var(--ph-text-2);
+  margin: 0 2px; font-size: 13px; color: var(--ph-text-2);
   font-variant-numeric: tabular-nums;
 }
 .account-summary strong { color: var(--ph-text); }
@@ -316,27 +389,27 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
    (touch-scroll) and surface a feature that used to be hidden behind a
    collapsed <details>. State is communicated three ways for robustness:
    left-edge color stripe, right-side state dot, and explicit text label. */
-.market-section { margin: 16px 0 14px; }
-.market-rail-head { display: flex; align-items: center; padding: 0 2px 6px; }
+.market-section { display: block; }
+.market-rail-head { display: flex; align-items: center; gap: 10px; padding: 0 2px 4px; }
 .market-rail-head__label {
-  font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em;
+  font-size: 13px; font-weight: 600; letter-spacing: 0.07em;
   text-transform: uppercase; color: var(--ph-text-3);
 }
 .market-rail {
-  display: flex; gap: 8px;
-  overflow-x: auto; padding: 2px 2px 6px;
+  display: flex; gap: 10px;
+  overflow-x: auto; padding: 4px 2px 6px;
   scrollbar-width: thin; scrollbar-color: var(--ph-surface-3) transparent;
 }
 .market-rail::-webkit-scrollbar { height: 6px; }
 .market-rail::-webkit-scrollbar-thumb { background: var(--ph-surface-3); border-radius: 999px; }
 
 .market-card {
-  flex: 0 0 auto; min-width: 158px; max-width: 240px;
-  margin: 0; padding: 10px 12px;
+  flex: 0 0 auto; min-width: 150px; max-width: 240px;
+  margin: 0; padding: 11px 13px;
   border: 1px solid var(--ph-border);
   border-left: 3px solid var(--ph-text-3);
-  border-radius: var(--ph-r-sm);
-  background: var(--ph-surface-2); box-shadow: none;
+  border-radius: var(--ph-r-md);
+  background: var(--ph-surface); box-shadow: none;
 }
 .market-card--open     { border-left-color: var(--ph-pos);    }
 .market-card--extended { border-left-color: var(--ph-accent); }
@@ -348,8 +421,8 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   display: flex; align-items: center; gap: 8px;
   background: transparent; padding: 0; margin: 0; border: 0;
 }
-.market-card__flag { font-size: 1.05rem; }
-.market-card__exchange { font-weight: 600; font-size: 0.92rem; color: var(--ph-text); }
+.market-card__flag { font-size: 17px; }
+.market-card__exchange { font-weight: 600; font-size: 14px; color: var(--ph-text); }
 .market-card__state-dot {
   width: 8px; height: 8px; border-radius: 50%; margin-left: auto; flex: 0 0 auto;
   background: var(--ph-text-3);
@@ -360,35 +433,43 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .market-card__state-dot--closed   { background: var(--ph-text-3); }
 .market-card__state-dot--holiday  { background: var(--ph-text-3); opacity: 0.45; }
 
-.market-card__state-label { font-size: 0.78rem; font-weight: 600; margin-top: 6px; }
+.market-card__state-label { font-size: 12px; font-weight: 600; margin-top: 8px; }
 .market-card__state-label--open     { color: var(--ph-pos);    }
 .market-card__state-label--extended { color: var(--ph-accent); }
 .market-card__state-label--lunch    { color: var(--ph-warn);   }
 .market-card__state-label--closed,
 .market-card__state-label--holiday  { color: var(--ph-text-3); }
 
-.market-card__transition { margin: 2px 0 0; font-size: 0.78rem; color: var(--ph-text-3); }
+.market-card__transition { margin: 2px 0 0; font-size: 11.5px; color: var(--ph-text-3); }
 .market-card__transition time { color: var(--ph-text-2); }
 .market-card__countdown { margin-left: 0.25rem; font-variant-numeric: tabular-nums; }
 
-/* ---- 8. HOLDINGS TABLE --------------------------------------------------- */
-.holdings-table {
-  width: 100%; border-collapse: collapse; margin-top: 8px;
+/* ---- 8. HOLDINGS CARD + TABLE -------------------------------------------- */
+.holdings-card {
   background: var(--ph-surface); border: 1px solid var(--ph-border);
   border-radius: var(--ph-r-lg); overflow: hidden; box-shadow: var(--ph-shadow);
 }
+.holdings-table {
+  width: 100%; border-collapse: collapse; margin: 0;
+}
 .holdings-table thead th {
+  /* Sticks just under the slim app-bar. --ph-app-bar-height is a token. */
+  position: sticky; top: var(--ph-app-bar-height); z-index: 5;
   background: var(--ph-surface-2);
-  text-align: right; font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.04em; color: var(--ph-text-3); padding: 11px 16px; white-space: nowrap;
+  text-align: right; font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--ph-text-3);
+  padding: 11px 16px; white-space: nowrap;
   border-bottom: 1px solid var(--ph-border);
 }
 .holdings-table thead th.col-name { text-align: left; }
 .holdings-table th.sortable { cursor: pointer; user-select: none; }
 .holdings-table th.sortable:hover, .holdings-table th.sort-active { color: var(--ph-text); }
-.sort-indicator { display: inline-block; width: 0.8em; margin-left: 0.15rem; color: var(--ph-accent); font-size: 0.7rem; }
+.sort-indicator { display: inline-block; width: 10px; margin-left: 0.15rem; color: var(--ph-accent); font-size: 10px; }
 
-.holdings-table .col-num { text-align: right; white-space: nowrap; width: 1%; }
+.holdings-table .col-num {
+  text-align: right; white-space: nowrap; width: 1%;
+  font-variant-numeric: tabular-nums;
+}
 .holdings-table .col-name { width: auto; }
 .holdings-table tbody td {
   padding: 12px 16px; border-bottom: 1px solid var(--ph-border-soft); vertical-align: middle;
@@ -398,35 +479,53 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .position-row { transition: background 0.12s; }
 .position-row[data-row-detail] { cursor: pointer; }
 .position-row:hover { background: var(--ph-surface-2); }
-
 .position-row .col-name { line-height: 1.3; overflow-wrap: anywhere; }
-/* Flag rendered as a small tile so it reads as a region marker, not loose emoji.
+
+/* New flex layout on the first cell: flag tile on the left, two-line text
+   block on the right. Mirrors the mockup's .holding > .flag-chip + body. */
+.holding { display: flex; align-items: center; gap: 11px; }
+.holding__body { min-width: 0; }
+.position-row .h-name, .position-row .name-en {
+  display: block;
+  font-weight: 600; font-size: 14px; line-height: 1.2;
+}
+.position-row--cash .h-name, .position-row--cash .name-en {
+  color: var(--ph-text-2); font-weight: 500;
+}
+.position-row .h-sub, .position-row .native-symbol {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  margin-top: 2px; font-size: 12px; color: var(--ph-text-3);
+}
+
+/* Flag rendered as a 30x30 tile so it reads as a region marker, not loose emoji.
    The inset box-shadow paints a 3px region-color stripe down the left edge —
    --region-color is set inline per row by region_color_for_exchange(). Cash
    and unmapped venues set it to transparent so they fall back to the plain
    tile look. */
 .position-row .flag {
-  display: inline-grid; place-items: center; width: 26px; height: 26px;
-  margin-right: 0.5rem; border-radius: 7px; background: var(--ph-surface-3);
-  font-size: 0.95rem; vertical-align: middle;
+  flex: 0 0 auto;
+  display: inline-grid; place-items: center; width: 30px; height: 30px;
+  border-radius: 8px; background: var(--ph-surface-3);
+  font-size: 16px;
   box-shadow: inset 3px 0 0 var(--region-color, transparent);
 }
-.position-row .cash-indicator { margin-right: 0.3rem; font-size: 0.95rem; }
-.position-row .name-en { font-weight: 600; font-size: 0.92rem; }
-.position-row--cash .name-en { color: var(--ph-text-2); font-weight: 500; }
-.position-row .native-symbol {
-  display: block; color: var(--ph-text-3); font-size: 0.74rem; margin-top: 0.15rem;
-  display: flex; align-items: center; gap: 0.4rem;
+.position-row .cash-indicator { margin-right: 0.3rem; font-size: 16px; }
+
+/* The ticker symbol gets the mono face — Bloomberg-ish at a glance. */
+.position-row .tickpill {
+  font-family: var(--ph-font-mono); font-size: 11px; color: var(--ph-text-2);
+  font-weight: 500;
 }
-.position-row .currency { color: var(--ph-text-3); font-size: 0.72rem; margin-left: 0.2rem; }
+
+.position-row .currency { color: var(--ph-text-3); font-size: 11px; margin-left: 2px; }
 .position-row .account-pill {
-  padding: 0 0.45rem; border-radius: var(--ph-pill);
+  padding: 1px 6px; border-radius: var(--ph-pill);
   background: var(--ph-surface-3); color: var(--ph-text-3);
-  font-size: 0.66rem; font-weight: 600; line-height: 1.5;
+  font-size: 10px; font-weight: 600; line-height: 1.5;
 }
 .position-row .pence-suffix, .position-row .prev-close-note,
 .position-row .price-source-note {
-  color: var(--ph-text-3); font-size: 0.7rem; margin-left: 0.25rem;
+  color: var(--ph-text-3); font-size: 10.5px; margin-left: 0.25rem;
 }
 .position-row .prev-close-note { font-style: italic; }
 .position-row .price-source-note {
@@ -435,10 +534,18 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   color: var(--ph-warn); background: var(--ph-warn-soft);
   font-weight: 600; white-space: nowrap;
 }
-.position-row .lunch-note { display: block; color: var(--ph-warn); font-size: 0.72rem; margin-top: 0.15rem; }
+.position-row .lunch-note {
+  display: block; color: var(--ph-warn); font-size: 11px; margin-top: 2px;
+}
 .position-row .fx-fallback-badge, .position-row .fx-stale-badge,
-.position-row .price-stale-badge { margin-left: 0.2rem; font-size: 0.8rem; }
+.position-row .price-stale-badge { margin-left: 0.2rem; font-size: 12px; }
 .position-row--stale { opacity: 0.55; }
+
+/* USD market value is the eye-anchor — bolded over the lighter native MV. */
+.position-row .mv-usd { font-weight: 600; }
+.position-row .mv-native {
+  font-size: 11.5px; color: var(--ph-text-3); font-weight: 500;
+}
 
 .holdings-table .col-pnl { font-weight: 600; }
 .position-row .pnl-na { color: var(--ph-text-3); font-weight: 400; }
@@ -452,7 +559,7 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 }
 .pnl-stack .pnl-usd { font-weight: 600; }
 .pnl-stack .pnl-pct {
-  font-size: 0.74rem; font-weight: 500; opacity: 0.85; margin-top: 2px;
+  font-size: 11.5px; font-weight: 500; opacity: 0.85; margin-top: 2px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -465,7 +572,7 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   line-height: 1.15;
 }
 .last-wrap .chg-pct {
-  font-size: 0.74rem; font-weight: 500; opacity: 0.9; margin-top: 2px;
+  font-size: 11.5px; font-weight: 500; opacity: 0.9; margin-top: 2px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -490,13 +597,13 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .row-detail-modal article { padding: 1.1rem 1.3rem 1.3rem; margin: 0; border: 0; background: transparent; box-shadow: none; }
 .row-detail-modal header { background: transparent; padding: 0; margin: 0; border: 0; }
 .row-detail-modal h3 { margin: 0 0 0.25rem; font-size: 1.15rem; }
-.row-detail-modal .muted { color: var(--ph-text-3); font-size: 0.85rem; margin: 0 0 0.9rem; }
+.row-detail-modal .muted { color: var(--ph-text-3); font-size: 13px; margin: 0 0 0.9rem; }
 .row-detail-grid {
   display: grid; grid-template-columns: max-content 1fr; column-gap: 0.85rem; row-gap: 0.4rem;
   margin: 0; font-variant-numeric: tabular-nums;
 }
-.row-detail-grid dt { color: var(--ph-text-3); font-size: 0.8rem; }
-.row-detail-grid dd { margin: 0; text-align: right; font-size: 0.88rem; font-weight: 500; }
+.row-detail-grid dt { color: var(--ph-text-3); font-size: 13px; }
+.row-detail-grid dd { margin: 0; text-align: right; font-size: 13.5px; font-weight: 500; }
 .row-detail-modal footer { margin-top: 1.1rem; text-align: right; padding: 0; border: 0; background: transparent; }
 
 /* ---- 10. EMPTY STATE ----------------------------------------------------- */
@@ -510,14 +617,21 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .empty-state__title {
   margin: 0 0 6px; font-size: 1rem; font-weight: 600; color: var(--ph-text-2);
 }
-.empty-state__hint { margin: 0; font-size: 0.85rem; color: var(--ph-text-3); }
+.empty-state__hint { margin: 0; font-size: 0.9rem; color: var(--ph-text-3); }
 
 /* ---- 11. RESPONSIVE ------------------------------------------------------ */
-@media (max-width: 480px) {
-  .app-header { padding: 8px 12px 10px; }
-  .holdings-table thead th, .holdings-table tbody td { padding: 10px 10px; }
-  .position-row .name-en { font-size: 0.9rem; }
-  /* Mobile portrait priority: drop native market value, keep USD (PLAN.md). */
+@media (max-width: 720px) {
+  /* Drop native MV column on smaller tablets too — keeps USD as the
+     eye-anchor; matches the mockup's mobile priority. */
   .holdings-table thead th:nth-child(4),
   .holdings-table tbody td:nth-child(4) { display: none; }
+  .hero { padding: 18px 18px; }
+  .total-mv-usd { font-size: clamp(1.9rem, 7vw, 2.6rem); }
+}
+@media (max-width: 480px) {
+  .app-header { padding: 8px 12px; }
+  main.container { padding-top: 12px; padding-bottom: 48px; }
+  .hero { padding: 16px 16px; }
+  .holdings-table thead th, .holdings-table tbody td { padding: 10px 10px; }
+  .position-row .h-name, .position-row .name-en { font-size: 13.5px; }
 }
