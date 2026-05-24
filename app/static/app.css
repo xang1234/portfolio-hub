@@ -52,11 +52,6 @@
                   Consolas, "Liberation Mono", monospace;
   /* Back-compat alias; older selectors below still reference --ph-font. */
   --ph-font: var(--ph-font-ui);
-
-  /* Slim sticky-bar height used as the offset for the holdings thead so
-     thead docks just under the bar without overlap. Adjust here if the
-     bar height changes. */
-  --ph-app-bar-height: 52px;
 }
 
 /* Dark tokens — applied for auto (system dark) and explicit dark theme. */
@@ -502,10 +497,11 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .holdings-table tbody { border: 0; }
 .holdings-table tbody tr { border: 0; }
 .holdings-table thead th {
-  /* Sticks just under the slim app-bar. --ph-app-bar-height is a token.
-     Header band uses a slightly lifted surface so the column labels read
-     as a separate row from the data. */
-  position: sticky; top: var(--ph-app-bar-height); z-index: 5;
+  /* Header band uses a slightly lifted surface so the column labels read
+     as a separate row from the data. NOT sticky — when the thead floated
+     under the slim bar it visibly overlapped the first few data rows on
+     scroll, so it now renders as the first row of the table and scrolls
+     away with the content. */
   background: var(--ph-surface-3);
   text-align: right; font-size: 11px; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.05em; color: var(--ph-text-3);
