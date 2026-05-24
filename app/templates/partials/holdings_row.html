@@ -52,9 +52,21 @@ adds noise without information, so show — instead. #}
 —
 {% elif position.last_price > 0 %}
 <div class="last-wrap">
-<span>{{ "{:,.2f}".format(position.last_price) }}{% if position.price_magnifier > 1 %} <small class="pence-suffix" title="Quoted in pence (1/100 of {{ position.currency }})">GBp</small>{% endif %}{% if position.last_price_is_previous_close %} <small class="prev-close-note" title="No live market data; showing previous close">prev close</small>{% endif %}{% if position.last_price_is_broker_mark %} <small class="price-source-note price-source-note--broker" title="IB portfolio valuation; updates on the account cadence, about every 3 minutes without a position change">broker mark</small>{% endif %}{% if position.last_price_is_delayed %} <small class="price-source-note price-source-note--delayed" title="Delayed or frozen market data from IBKR">delayed</small>{% endif %}{% if position.last_price_is_stale %} <span class="price-stale-badge" title="Broker reconnecting — price hasn't ticked since the disconnect">⚠️</span>{% endif %}</span>
+{# Line 1: price + inline unit suffix (GBp) and the stale ⚠️ glyph. #}
+<span class="last-price-line">{{ "{:,.2f}".format(position.last_price) }}{% if position.price_magnifier > 1 %} <small class="pence-suffix" title="Quoted in pence (1/100 of {{ position.currency }})">GBp</small>{% endif %}{% if position.last_price_is_stale %} <span class="price-stale-badge" title="Broker reconnecting — price hasn't ticked since the disconnect">⚠️</span>{% endif %}</span>
+{# Line 2: today's % move (intraday delta). #}
 {% set _chg = position.intraday_change_pct %}
 {% if _chg is not none %}<span class="chg-pct {% if _chg >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">{% if _chg >= 0 %}+{% endif %}{{ "{:.2f}".format(_chg) }}%</span>{% endif %}
+{# Line 3: price-source provenance tags (prev close / broker mark / delayed)
+   stacked below so they don't widen the column. Wrapped in their own row
+   that allows wrap when multiple tags coexist. #}
+{% if position.last_price_is_previous_close or position.last_price_is_broker_mark or position.last_price_is_delayed %}
+<span class="price-source-tags">
+{% if position.last_price_is_previous_close %}<small class="prev-close-note" title="No live market data; showing previous close">prev close</small>{% endif %}
+{% if position.last_price_is_broker_mark %}<small class="price-source-note price-source-note--broker" title="IB portfolio valuation; updates on the account cadence, about every 3 minutes without a position change">broker mark</small>{% endif %}
+{% if position.last_price_is_delayed %}<small class="price-source-note price-source-note--delayed" title="Delayed or frozen market data from IBKR">delayed</small>{% endif %}
+</span>
+{% endif %}
 </div>
 {% else %}—{% endif %}
 </td>

@@ -186,7 +186,7 @@ Last <span class="sort-indicator" data-sort-indicator></span>
 Market Value <span class="sort-indicator" data-sort-indicator></span>
 </th>
 <th class="col-num sortable" data-sort-key="mv_usd" role="button" tabindex="0">
-MV USD <span class="sort-indicator" data-sort-indicator></span>
+Market Value USD <span class="sort-indicator" data-sort-indicator></span>
 </th>
 <th class="col-num sortable col-pnl" data-sort-key="pnl_usd" role="button" tabindex="0">
 P&amp;L USD <span class="sort-indicator" data-sort-indicator></span>
@@ -225,12 +225,23 @@ sse-swap="snapshot,positions">
     if (!bar) return;
     var rows = document.querySelectorAll('#positions-tbody .position-row');
     var groups = {}, total = 0;
+    // Map exchange-code → flag emoji harvested from the row markup so the
+    // legend can show "🇺🇸 30%" instead of "TSEJ 30%". Falls back to the
+    // exchange code when no flag is available.
+    var keyFlag = {};
     rows.forEach(function (r) {
-      var key = r.getAttribute('data-asset-class') === 'CASH'
-        ? 'Cash' : (r.getAttribute('data-exchange') || 'Other');
+      var isCash = r.getAttribute('data-asset-class') === 'CASH';
+      var key = isCash ? 'Cash' : (r.getAttribute('data-exchange') || 'Other');
       var v = parseFloat(r.getAttribute('data-mv-usd')) || 0;
       if (v <= 0) return;
       groups[key] = (groups[key] || 0) + v; total += v;
+      if (!keyFlag[key]) {
+        if (isCash) { keyFlag[key] = '💵'; }
+        else {
+          var flagEl = r.querySelector('.flag');
+          if (flagEl) keyFlag[key] = (flagEl.textContent || '').trim();
+        }
+      }
     });
     if (total <= 0) { bar.innerHTML = ''; if (legend) legend.innerHTML = ''; return; }
     var entries = Object.keys(groups)
@@ -242,8 +253,11 @@ sse-swap="snapshot,positions">
         + PALETTE[i % PALETTE.length] + '" title="' + e[0] + ' ' + Math.round(pct) + '%"></span>';
     }).join('');
     if (legend) legend.innerHTML = entries.slice(0, 8).map(function (e, i) {
-      return '<span class="alloc-it"><span class="alloc-sw" style="background:'
-        + PALETTE[i % PALETTE.length] + '"></span>' + e[0] + ' ' + Math.round(e[1] / total * 100) + '%</span>';
+      var pct = Math.round(e[1] / total * 100);
+      var label = keyFlag[e[0]] || e[0];
+      return '<span class="alloc-it" title="' + e[0] + ' ' + pct + '%">'
+        + '<span class="alloc-sw" style="background:' + PALETTE[i % PALETTE.length] + '"></span>'
+        + label + ' ' + pct + '%</span>';
     }).join('');
   }
   buildAllocation();

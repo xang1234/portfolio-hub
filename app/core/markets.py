@@ -90,8 +90,11 @@ _IB_EXCHANGE_TO_DISPLAY: dict[str, str] = {
     "KSE": "KRX",
     "IBIS": "Xetra",
     "FWB": "Xetra",
-    "SBF": "Euronext Paris",
-    "AEB": "Euronext Amsterdam",
+    # Both Paris (SBF) and Amsterdam (AEB) are Euronext; the country flag on
+    # the market card differentiates them so the label can drop the city —
+    # saves horizontal space in the rail when both are open simultaneously.
+    "SBF": "Euronext",
+    "AEB": "Euronext",
     "BM": "BME Madrid",
     "BVME": "Borsa Italiana",
     "SFB": "Stockholm",

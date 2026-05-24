@@ -320,17 +320,19 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 }
 
 /* ---- 6. FILTER CONTROLS (segmented inside a card) ------------------------ */
-/* The chip rows read as one grouped segmented control rather than loose pills. */
+/* The chip rows read as one grouped segmented control rather than loose pills.
+   Tightened to "just a bit bigger than the text" so the controls band stops
+   competing with the data table below for vertical space. */
 .broker-chips, .account-chips, .asset-chips {
   display: inline-flex; flex-wrap: wrap; gap: 2px;
-  margin: 0; padding: 3px;
+  margin: 0; padding: 2px;
   background: var(--ph-surface-3); border-radius: var(--ph-pill); vertical-align: middle;
 }
 .broker-chip, .account-chip, .asset-chip {
-  display: inline-flex; align-items: center; min-height: 32px;
-  padding: 0.3rem 0.9rem; border: 0; border-radius: var(--ph-pill);
+  display: inline-flex; align-items: center; min-height: 26px;
+  padding: 2px 12px; border: 0; border-radius: var(--ph-pill);
   background: transparent; color: var(--ph-text-2);
-  font-size: 13px; font-weight: 600;
+  font-size: 13px; font-weight: 600; line-height: 1.2;
   text-decoration: none; cursor: pointer; transition: 0.15s;
 }
 .broker-chip:hover, .account-chip:hover, .asset-chip:hover { color: var(--ph-text); }
@@ -356,28 +358,35 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   opacity: 0.4; cursor: not-allowed; pointer-events: none;
 }
 
-/* Single controls band, now framed as a card to match the mockup. The
-   search input pushes to the right via margin-left: auto. */
+/* Single controls band, framed as a card. The search input pushes to the
+   right via margin-left: auto. Padding is slim ("just a bit bigger than
+   the text") so the band reads as a strip, not a panel. */
 .controls {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
-  padding: 12px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+  padding: 6px 10px;
   background: var(--ph-surface); border: 1px solid var(--ph-border);
   border-radius: var(--ph-r-md);
 }
+/* Search box matches chip height (26px min) and explicitly overrides
+   Pico's default <input> border/box-shadow that was creating the
+   double-border effect. */
 .controls__search {
   margin-left: auto;
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 7px 14px; min-width: 180px;
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 26px; padding: 0 12px; min-width: 180px;
   background: var(--ph-surface-3); border: 1px solid transparent;
   border-radius: var(--ph-pill); color: var(--ph-text);
   transition: border-color 0.15s;
 }
 .controls__search:focus-within { border-color: var(--ph-accent); }
-.controls__search-icon { color: var(--ph-text-3); font-size: 14px; }
-.controls__search input {
-  border: 0; background: transparent; color: var(--ph-text);
-  font: inherit; font-size: 13.5px; outline: none; width: 100%;
-  padding: 0; margin: 0; min-width: 0;
+.controls__search-icon { color: var(--ph-text-3); font-size: 13px; }
+.controls__search input,
+.controls__search input[type="search"] {
+  border: 0 !important; box-shadow: none !important;
+  background: transparent !important; color: var(--ph-text);
+  font: inherit; font-size: 13px; outline: none;
+  width: 100%; padding: 0; margin: 0; min-width: 0; min-height: 0;
+  -webkit-appearance: none;
 }
 .controls__search input::placeholder { color: var(--ph-text-3); }
 /* Strip the search-input's browser-default clear-button on WebKit. */
@@ -473,14 +482,23 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .holdings-table {
   width: 100%; border-collapse: collapse; margin: 0;
   background: transparent;
+  /* Pico paints a 1px border on the <table> itself; combined with the
+     card's own top border, that stacked into a "row of blue lines"
+     above the thead. Zero it out — only our explicit thead.border-bottom
+     and tbody td.border-bottom should paint. */
+  border: 0;
 }
-/* Defeat any Pico table backgrounds that would leak through the card. */
+/* Defeat any Pico table backgrounds + borders that would leak through. */
 .holdings-table thead, .holdings-table tbody,
 .holdings-table tbody tr,
 .holdings-table tbody tr:nth-child(even),
 .holdings-table tbody td {
   background: transparent;
+  border-top: 0;
 }
+.holdings-table thead { border: 0; }
+.holdings-table tbody { border: 0; }
+.holdings-table tbody tr { border: 0; }
 .holdings-table thead th {
   /* Sticks just under the slim app-bar. --ph-app-bar-height is a token.
      Header band uses a slightly lifted surface so the column labels read
@@ -501,13 +519,14 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   text-align: right; white-space: nowrap; width: 1%;
   font-variant-numeric: tabular-nums;
 }
-/* Cap the description column so long company names wrap (h-name has
-   overflow-wrap: anywhere already) instead of pushing the numeric columns
-   off to the right. ~40% narrower than the natural auto width on typical
-   "Taiwan Semiconductor Manufacturing Co." inputs. */
-.holdings-table .col-name { width: 1%; max-width: 200px; }
+/* Description column cap — generous (~400px) so typical company names
+   fit on one line, but bounded so a long entry wraps via h-name's
+   overflow-wrap: anywhere rather than pushing the numeric columns off
+   the right edge. */
+.holdings-table .col-name { width: 1%; max-width: 400px; }
 .holdings-table tbody td {
   padding: 12px 16px; border-bottom: 1px solid var(--ph-border-soft); vertical-align: middle;
+  color: var(--ph-text);
 }
 .holdings-table tbody tr:last-child td { border-bottom: 0; }
 
@@ -549,7 +568,7 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 }
 .position-row .h-sub, .position-row .native-symbol {
   display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
-  margin-top: 2px; font-size: 12px; color: var(--ph-text-3);
+  margin-top: 2px; font-size: 12px; color: var(--ph-text-2);
 }
 
 /* Flag rendered as a 30x30 tile so it reads as a region marker, not loose emoji.
@@ -597,9 +616,9 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .position-row--stale { opacity: 0.55; }
 
 /* USD market value is the eye-anchor — bolded over the lighter native MV. */
-.position-row .mv-usd { font-weight: 600; }
+.position-row .mv-usd { font-weight: 600; color: var(--ph-text); }
 .position-row .mv-native {
-  font-size: 11.5px; color: var(--ph-text-3); font-weight: 500;
+  font-size: 11.5px; color: var(--ph-text-2); font-weight: 500;
 }
 
 .holdings-table .col-pnl { font-weight: 600; }
@@ -630,6 +649,15 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   font-size: 11.5px; font-weight: 500; opacity: 0.9; margin-top: 2px;
   font-variant-numeric: tabular-nums;
 }
+/* Price-source provenance tags (prev close / broker mark / delayed) sit on
+   their own row below the price+chg block so they don't widen the column.
+   Each tag keeps its existing border/color rules; the wrapper just stacks
+   them and lets them wrap to a second line if all three coexist. */
+.last-wrap .price-source-tags {
+  display: inline-flex; flex-wrap: wrap; justify-content: flex-end;
+  gap: 3px; margin-top: 3px;
+}
+.last-wrap .price-source-tags > * { margin-left: 0; }
 
 /* Tick flash — JS in postSwapRehydrate adds the class for ~700ms when a
    row's data-last-price changes after an SSE swap. Direction-tinted so the
