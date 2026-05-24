@@ -143,7 +143,6 @@ body {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
 }
-.mono { font-family: var(--ph-font-mono); }
 
 .pull-refresh-indicator {
   position: fixed; top: 0; left: 50%; transform: translateX(-50%);
@@ -521,7 +520,15 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   background: var(--ph-surface-3); overflow: hidden;
   margin-right: 6px;
 }
-.alloc-mini__fill { display: block; height: 100%; background: var(--ph-accent); border-radius: var(--ph-pill); }
+.alloc-mini__fill {
+  display: block; height: 100%; border-radius: var(--ph-pill);
+  background: var(--ph-accent);
+  /* The row partial only renders .alloc-mini when market_value_usd > 0, so
+     a positive-but-tiny weight (e.g. 0.3 %) would compute to a sub-pixel
+     fill width and disappear visually. min-width keeps a sliver visible so
+     long-tail holdings don't all look like 0 %. */
+  min-width: 2px;
+}
 .col-alloc__pct { color: var(--ph-text-3); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 
 .position-row { transition: background 0.12s; }

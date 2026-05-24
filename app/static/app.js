@@ -99,6 +99,30 @@
         });
     }
 
+    // The slim app-bar is normally ~52px but grows when the reconnect banner
+    // wraps inside it (flex: 1 0 100% on the banner takes a second row).
+    // The holdings table's sticky thead docks at top: var(--ph-app-bar-height);
+    // without keeping that var in sync with the actual header height, the
+    // thead would float over the banner during the daily IBKR reconnect — the
+    // one moment users most need the banner to be readable. ResizeObserver
+    // writes the current header height to :root on every layout change.
+    let _appHeaderObserver = null;
+    function attachAppHeaderObserver() {
+        if (typeof ResizeObserver === 'undefined') return;
+        const header = document.querySelector('.app-header');
+        if (!header) return;
+        if (_appHeaderObserver) { try { _appHeaderObserver.disconnect(); } catch (e) {} }
+        const sync = () => {
+            const h = header.offsetHeight;
+            if (h > 0) {
+                document.documentElement.style.setProperty('--ph-app-bar-height', h + 'px');
+            }
+        };
+        _appHeaderObserver = new ResizeObserver(sync);
+        _appHeaderObserver.observe(header);
+        sync();
+    }
+
     // Holdings client-side search. Hides rows whose name/ticker don't match
     // the (case-insensitive) substring. Pure DOM — does not touch the SSE
     // subscription so live ticks keep flowing into hidden rows.
@@ -360,6 +384,7 @@
     function onReady() {
         applyTheme(readStoredTheme());
         attachThemeToggle();
+        attachAppHeaderObserver();
         attachSearchHandler();
         attachSparkline();
         tick();
@@ -479,6 +504,7 @@
         initSort();
         attachLongPressHandlers();
         attachThemeToggle();
+        attachAppHeaderObserver();
         attachSearchHandler();
         applySearchToRows();
         // Refresh the sparkline only on swaps that could change its inputs

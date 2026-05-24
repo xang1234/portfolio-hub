@@ -92,7 +92,7 @@ adds noise without information, so show — instead. #}
 {% set _tot = (totals.mv_usd if totals else 0) or 0 %}
 {% if _tot > 0 and position.market_value_usd > 0 and not position.fx_unavailable %}
 {% set _wt = position.market_value_usd / _tot * 100 %}
-<span class="alloc-mini" aria-hidden="true"><span class="alloc-mini__fill" style="width:{{ "{:.0f}".format(_wt) }}%"></span></span><span class="col-alloc__pct">{{ "{:.0f}".format(_wt) }}%</span>
+<span class="alloc-mini" aria-hidden="true"><span class="alloc-mini__fill" style="width:{{ "{:.1f}".format(_wt) }}%"></span></span><span class="col-alloc__pct">{{ "{:.1f}".format(_wt) }}%</span>
 {% else %}
 <span class="pnl-na">—</span>
 {% endif %}
