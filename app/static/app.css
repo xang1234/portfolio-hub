@@ -534,24 +534,31 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 :where(.holdings-table tbody td) { color: var(--ph-text); }
 .holdings-table tbody tr:last-child td { border-bottom: 0; }
 
-/* Cols 2-5 (Qty, Last, Market Value, Market Value USD) trimmed ~1/3 in
-   width by halving their horizontal padding and letting their thead text
-   wrap to two lines. Frees space for the name column (col 1), which the
-   user wants as wide as possible. col-pnl (6) and col-alloc (7) keep
-   the default padding so the right edge stays comfortable. */
+/* Cols 2-5 (Qty, Last, Market Value, Market Value USD) compressed: tight
+   padding + smaller numeric font so the four columns visibly shrink
+   ~1/3 below their natural content width. Headers also drop to 10px and
+   wrap to two lines. Frees space for the name column (col 1). col-pnl
+   (6) and col-alloc (7) keep the default padding + font-size so the
+   eye-anchor P&L value and the alloc bar stay legible at full size. */
 .holdings-table thead th:nth-child(2),
 .holdings-table thead th:nth-child(3),
 .holdings-table thead th:nth-child(4),
 .holdings-table thead th:nth-child(5) {
-  padding-left: 8px; padding-right: 8px;
+  padding-left: 4px; padding-right: 4px;
+  font-size: 10px;
   white-space: normal;
 }
 .holdings-table tbody td:nth-child(2),
 .holdings-table tbody td:nth-child(3),
 .holdings-table tbody td:nth-child(4),
 .holdings-table tbody td:nth-child(5) {
-  padding-left: 8px; padding-right: 8px;
+  padding-left: 4px; padding-right: 4px;
+  font-size: 12.5px;
 }
+/* Inner spans (.mv-usd, .mv-native) inherit; keep their relative weight
+   contrast — mv-usd still bold, mv-native still text-2 — just smaller. */
+.holdings-table tbody td:nth-child(4) .mv-native,
+.holdings-table tbody td:nth-child(5) .mv-usd { font-size: inherit; }
 
 /* Weight column: 46x5 px mini bar (accent-filled) + percentage label.
    Mirrors the hero allocation bar's visual language at row scale so the
