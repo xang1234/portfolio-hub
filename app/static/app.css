@@ -517,13 +517,15 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   text-align: right; white-space: nowrap; width: 1%;
   font-variant-numeric: tabular-nums;
 }
-/* Description column cap — generous (1200px, effectively unbounded
-   inside the 1180px container) so company names get all the room they
-   need. width:1% still triggers the "shrink-to-content" idiom in the
-   table-layout: auto algorithm, so short-name rows don't artificially
-   pad. Long names still wrap via h-name's overflow-wrap: anywhere if
-   the actual table width is exhausted. */
-.holdings-table .col-name { width: 1%; max-width: 1200px; }
+/* Description column: large min-width so the column visibly claims the
+   horizontal space freed by the tightened numeric columns (Qty / Last /
+   MV / MV USD / P&L / Weight, all on 4px padding + smaller font).
+   Without min-width, .col-name would shrink-to-content even when there's
+   slack to its right. max-width caps very-long names at ~the container
+   width so they still wrap via h-name's overflow-wrap: anywhere. */
+.holdings-table .col-name {
+  width: auto; min-width: 500px; max-width: 1200px;
+}
 .holdings-table tbody td {
   padding: 12px 16px; border-bottom: 1px solid var(--ph-border-soft); vertical-align: middle;
 }
@@ -534,31 +536,32 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 :where(.holdings-table tbody td) { color: var(--ph-text); }
 .holdings-table tbody tr:last-child td { border-bottom: 0; }
 
-/* Cols 2-5 (Qty, Last, Market Value, Market Value USD) compressed: tight
-   padding + smaller numeric font so the four columns visibly shrink
-   ~1/3 below their natural content width. Headers also drop to 10px and
-   wrap to two lines. Frees space for the name column (col 1). col-pnl
-   (6) and col-alloc (7) keep the default padding + font-size so the
-   eye-anchor P&L value and the alloc bar stay legible at full size. */
-.holdings-table thead th:nth-child(2),
-.holdings-table thead th:nth-child(3),
-.holdings-table thead th:nth-child(4),
-.holdings-table thead th:nth-child(5) {
+/* Cols 2-7 (Qty, Last, MV native, MV USD, P&L USD, Weight) all share the
+   same compressed treatment: tight padding + smaller numeric font so the
+   six numeric columns visibly shrink below their natural content width
+   and the name column claims the freed horizontal space. Headers drop
+   to 10px and wrap to two lines so long labels ("Market Value USD")
+   fit the narrower cells. */
+.holdings-table thead th:nth-child(n+2),
+.holdings-table tbody td:nth-child(n+2) {
   padding-left: 4px; padding-right: 4px;
-  font-size: 10px;
-  white-space: normal;
 }
-.holdings-table tbody td:nth-child(2),
-.holdings-table tbody td:nth-child(3),
-.holdings-table tbody td:nth-child(4),
-.holdings-table tbody td:nth-child(5) {
-  padding-left: 4px; padding-right: 4px;
+.holdings-table thead th:nth-child(n+2) {
+  font-size: 10px; white-space: normal;
+}
+.holdings-table tbody td:nth-child(n+2) {
   font-size: 12.5px;
 }
-/* Inner spans (.mv-usd, .mv-native) inherit; keep their relative weight
-   contrast — mv-usd still bold, mv-native still text-2 — just smaller. */
-.holdings-table tbody td:nth-child(4) .mv-native,
-.holdings-table tbody td:nth-child(5) .mv-usd { font-size: inherit; }
+/* Inner spans inherit the smaller font so the bold/lighter contrast
+   reads at the new scale (mv-usd still bold, mv-native still text-2,
+   pnl-stack still coloured). */
+.holdings-table tbody td:nth-child(n+2) .mv-native,
+.holdings-table tbody td:nth-child(n+2) .mv-usd,
+.holdings-table tbody td:nth-child(n+2) .pnl-stack { font-size: inherit; }
+
+/* Weight column specifically: halve the alloc-mini bar (46 → 24px) so
+   the column doesn't need to reserve room for the wider sparkline. */
+.holdings-table tbody td.col-alloc .alloc-mini { width: 24px; }
 
 /* Weight column: 46x5 px mini bar (accent-filled) + percentage label.
    Mirrors the hero allocation bar's visual language at row scale so the
