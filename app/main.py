@@ -273,12 +273,19 @@ def _render_rows_for_filter(
     # region_color_for_exchange is on templates_env.globals (above), so the
     # partial can call it directly without a per-render context key.
     template = templates_env.get_template("partials/holdings_row.html")
+    # Pass totals so the Weight column renders correctly on SSE-streamed
+    # rows too — the partial divides position.market_value_usd by
+    # totals.mv_usd. The total is computed against the filtered set so
+    # weight is "share of what the user is currently looking at", not
+    # share of the whole portfolio (matches the visible allocation bar).
+    totals = _compute_totals(positions)
     return "".join(
         template.render({
             "position": p,
             "flag_for_exchange": flag_for_exchange,
             "market_by_ib": {},
             "active_account": active_account or "All",
+            "totals": totals,
         })
         for p in positions
     )

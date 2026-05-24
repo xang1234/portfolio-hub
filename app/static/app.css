@@ -17,16 +17,16 @@
 
 /* ---- 1. TOKENS ----------------------------------------------------------- */
 :root {
-  --ph-bg:          #f4f6fa;
-  --ph-bg-grad:     radial-gradient(1200px 600px at 80% -10%, #e9eefb 0%, #f4f6fa 60%);
+  --ph-bg:          #eef2f8;
+  --ph-bg-grad:     radial-gradient(1200px 600px at 80% -10%, #dde6f4 0%, #eef2f8 60%);
   --ph-surface:     #ffffff;
-  --ph-surface-2:   #f7f9fc;
-  --ph-surface-3:   #eef2f8;
-  --ph-border:      #e2e8f0;
-  --ph-border-soft: #edf1f6;
-  --ph-text:        #0e1626;
-  --ph-text-2:      #475067;
-  --ph-text-3:      #8a93a6;
+  --ph-surface-2:   #f1f5fb;
+  --ph-surface-3:   #e2e8f0;
+  --ph-border:      #c8d1de;
+  --ph-border-soft: #dde3ec;
+  --ph-text:        #0a0f1a;
+  --ph-text-2:      #2f3a52;
+  --ph-text-3:      #5a6478;
   --ph-accent:      #2f6fed;
   --ph-accent-soft: rgba(47, 111, 237, 0.10);
   --ph-pos:         #0f9d6c;
@@ -62,16 +62,16 @@
 /* Dark tokens — applied for auto (system dark) and explicit dark theme. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --ph-bg:          #0a0d13;
-    --ph-bg-grad:     radial-gradient(1200px 600px at 80% -10%, #131a2b 0%, #0a0d13 60%);
-    --ph-surface:     #11151f;
-    --ph-surface-2:   #161b27;
-    --ph-surface-3:   #1c2330;
-    --ph-border:      #232a39;
-    --ph-border-soft: #1a202c;
-    --ph-text:        #eef2f8;
-    --ph-text-2:      #aab4c5;
-    --ph-text-3:      #6f7c91;
+    --ph-bg:          #070a10;
+    --ph-bg-grad:     radial-gradient(1200px 600px at 80% -10%, #141d33 0%, #070a10 60%);
+    --ph-surface:     #131826;
+    --ph-surface-2:   #1b2030;
+    --ph-surface-3:   #232a3c;
+    --ph-border:      #2f384c;
+    --ph-border-soft: #1d2434;
+    --ph-text:        #f3f6fb;
+    --ph-text-2:      #b9c2d3;
+    --ph-text-3:      #8390a8;
     --ph-accent:      #5b9dff;
     --ph-accent-soft: rgba(91, 157, 255, 0.14);
     --ph-pos:         #34d399;
@@ -84,16 +84,16 @@
   }
 }
 [data-theme="dark"] {
-  --ph-bg:          #0a0d13;
-  --ph-bg-grad:     radial-gradient(1200px 600px at 80% -10%, #131a2b 0%, #0a0d13 60%);
-  --ph-surface:     #11151f;
-  --ph-surface-2:   #161b27;
-  --ph-surface-3:   #1c2330;
-  --ph-border:      #232a39;
-  --ph-border-soft: #1a202c;
-  --ph-text:        #eef2f8;
-  --ph-text-2:      #aab4c5;
-  --ph-text-3:      #6f7c91;
+  --ph-bg:          #070a10;
+  --ph-bg-grad:     radial-gradient(1200px 600px at 80% -10%, #141d33 0%, #070a10 60%);
+  --ph-surface:     #131826;
+  --ph-surface-2:   #1b2030;
+  --ph-surface-3:   #232a3c;
+  --ph-border:      #2f384c;
+  --ph-border-soft: #1d2434;
+  --ph-text:        #f3f6fb;
+  --ph-text-2:      #b9c2d3;
+  --ph-text-3:      #8390a8;
   --ph-accent:      #5b9dff;
   --ph-accent-soft: rgba(91, 157, 255, 0.14);
   --ph-pos:         #34d399;
@@ -118,6 +118,12 @@
   --pico-border-radius:        var(--ph-r-md);
   --pico-spacing:              1rem;
   --pico-font-family:          var(--ph-font-ui);
+  /* Pico paints striped rows on tbody tr:nth-child(even) by default. We
+     want the .holdings-card surface to show through cleanly — bleached out
+     to transparent here so the row hover (.position-row:hover) is the only
+     row-level surface change. */
+  --pico-table-row-stripped-background-color: transparent;
+  --pico-table-background-color: transparent;
 }
 
 /* ---- 3. GLOBAL ----------------------------------------------------------- */
@@ -404,8 +410,12 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .market-rail::-webkit-scrollbar-thumb { background: var(--ph-surface-3); border-radius: 999px; }
 
 .market-card {
-  flex: 0 0 auto; min-width: 150px; max-width: 240px;
-  margin: 0; padding: 11px 13px;
+  /* Narrower min-width than the mockup (150 → 118) so more cards fit on a
+     row without horizontal scroll. The countdown moves to its own line
+     below the transition time (vs. inline), which lets each line stay
+     short; internal margins are tightened to absorb the extra line. */
+  flex: 0 0 auto; min-width: 118px; max-width: 200px;
+  margin: 0; padding: 10px 12px;
   border: 1px solid var(--ph-border);
   border-left: 3px solid var(--ph-text-3);
   border-radius: var(--ph-r-md);
@@ -433,29 +443,51 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .market-card__state-dot--closed   { background: var(--ph-text-3); }
 .market-card__state-dot--holiday  { background: var(--ph-text-3); opacity: 0.45; }
 
-.market-card__state-label { font-size: 12px; font-weight: 600; margin-top: 8px; }
+.market-card__state-label { font-size: 12px; font-weight: 600; margin-top: 6px; line-height: 1.15; }
 .market-card__state-label--open     { color: var(--ph-pos);    }
 .market-card__state-label--extended { color: var(--ph-accent); }
 .market-card__state-label--lunch    { color: var(--ph-warn);   }
 .market-card__state-label--closed,
 .market-card__state-label--holiday  { color: var(--ph-text-3); }
 
-.market-card__transition { margin: 2px 0 0; font-size: 11.5px; color: var(--ph-text-3); }
+/* "Opens at 09:30 ET" on its own line; the countdown ("· in 1h 23m" /
+   "· in 1d 16h") drops to a separate line below so the card can be
+   narrower without word-wrapping the time. Margins are tight to keep
+   the overall card height close to the pre-split rendering. */
+.market-card__transition {
+  margin: 4px 0 0; font-size: 11.5px; color: var(--ph-text-3); line-height: 1.2;
+}
 .market-card__transition time { color: var(--ph-text-2); }
-.market-card__countdown { margin-left: 0.25rem; font-variant-numeric: tabular-nums; }
+.market-card__countdown {
+  display: block; margin-top: 1px; font-size: 11px;
+  color: var(--ph-text-3); font-variant-numeric: tabular-nums; line-height: 1.2;
+}
 
 /* ---- 8. HOLDINGS CARD + TABLE -------------------------------------------- */
+/* The card uses --ph-surface-2 so it sits a tone above the body, distinct
+   from the lighter hero/market-card surfaces — gives the holdings table a
+   "data table" feel rather than another generic card. */
 .holdings-card {
-  background: var(--ph-surface); border: 1px solid var(--ph-border);
+  background: var(--ph-surface-2); border: 1px solid var(--ph-border);
   border-radius: var(--ph-r-lg); overflow: hidden; box-shadow: var(--ph-shadow);
 }
 .holdings-table {
   width: 100%; border-collapse: collapse; margin: 0;
+  background: transparent;
+}
+/* Defeat any Pico table backgrounds that would leak through the card. */
+.holdings-table thead, .holdings-table tbody,
+.holdings-table tbody tr,
+.holdings-table tbody tr:nth-child(even),
+.holdings-table tbody td {
+  background: transparent;
 }
 .holdings-table thead th {
-  /* Sticks just under the slim app-bar. --ph-app-bar-height is a token. */
+  /* Sticks just under the slim app-bar. --ph-app-bar-height is a token.
+     Header band uses a slightly lifted surface so the column labels read
+     as a separate row from the data. */
   position: sticky; top: var(--ph-app-bar-height); z-index: 5;
-  background: var(--ph-surface-2);
+  background: var(--ph-surface-3);
   text-align: right; font-size: 11px; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.05em; color: var(--ph-text-3);
   padding: 11px 16px; white-space: nowrap;
@@ -470,11 +502,27 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   text-align: right; white-space: nowrap; width: 1%;
   font-variant-numeric: tabular-nums;
 }
-.holdings-table .col-name { width: auto; }
+/* Cap the description column so long company names wrap (h-name has
+   overflow-wrap: anywhere already) instead of pushing the numeric columns
+   off to the right. ~40% narrower than the natural auto width on typical
+   "Taiwan Semiconductor Manufacturing Co." inputs. */
+.holdings-table .col-name { width: 1%; max-width: 200px; }
 .holdings-table tbody td {
   padding: 12px 16px; border-bottom: 1px solid var(--ph-border-soft); vertical-align: middle;
 }
 .holdings-table tbody tr:last-child td { border-bottom: 0; }
+
+/* Weight column: 46x5 px mini bar (accent-filled) + percentage label.
+   Mirrors the hero allocation bar's visual language at row scale so the
+   eye can connect a row's stripe to its slice of the hero bar above. */
+.alloc-mini {
+  display: inline-block; vertical-align: middle;
+  width: 46px; height: 5px; border-radius: var(--ph-pill);
+  background: var(--ph-surface-3); overflow: hidden;
+  margin-right: 6px;
+}
+.alloc-mini__fill { display: block; height: 100%; background: var(--ph-accent); border-radius: var(--ph-pill); }
+.col-alloc__pct { color: var(--ph-text-3); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 
 .position-row { transition: background 0.12s; }
 .position-row[data-row-detail] { cursor: pointer; }
