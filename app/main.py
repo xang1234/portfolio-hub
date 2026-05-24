@@ -525,6 +525,32 @@ def create_app(
                 inserted += 1
         return JSONResponse({"inserted": inserted})
 
+    @app.get("/api/equity-history")
+    async def equity_history(request: Request, account: str | None = None, days: int = 60):
+        """Time series of NLV (USD) for the hero sparkline.
+
+        ?days= is clamped to [1, 400] — under one year of trading days
+        is the only meaningful display window for a 220px-wide spark.
+        ?account= None or "All" aggregates across every linked account;
+        a specific account_id narrows to that one.
+
+        When no Store is attached (test_create_app paths skip lifespan),
+        we return [] rather than 503 so the client-side sparkline simply
+        no-ops. Same for an empty history before the first snapshot fires.
+        """
+        days_clamped = max(1, min(400, int(days)))
+        store = getattr(request.app.state, "store", None)
+        if store is None:
+            return JSONResponse([])
+        account_filter = None if account in (None, "", "All") else account
+        rows = await store.get_equity_history(
+            days=days_clamped, account_id=account_filter,
+        )
+        return JSONResponse([
+            {"t": r["snapshot_at"].isoformat(), "v": r["net_liquidation_usd"]}
+            for r in rows
+        ])
+
     @app.get("/stream/holdings")
     async def stream_holdings(
         request: Request,

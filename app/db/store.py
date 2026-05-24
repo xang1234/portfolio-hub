@@ -315,3 +315,47 @@ class Store:
             }
             for r in rows
         ]
+
+    async def get_equity_history(
+        self,
+        *,
+        days: int,
+        account_id: str | None = None,
+    ) -> list[dict]:
+        """Time series of net-liquidation USD over the last `days`, oldest
+        first. Each element is `{"snapshot_at": datetime, "net_liquidation_usd": float}`.
+
+        When `account_id` is None, sums NLV across all (broker, account_id)
+        per (snapshot_at, snapshot_session) so the hero sparkline reflects
+        the user's total exposure regardless of the active account filter.
+        Multiple exchange-close sessions on the same UTC day stay as
+        distinct points — gives sub-daily resolution to the curve at the
+        cost of mild jitter when (e.g.) NYSE_CLOSE and HKEX_CLOSE land
+        with materially different valuations.
+        """
+        since = _utcnow() - timedelta(days=days)
+        conn = await self._connection()
+        if account_id is not None:
+            sql = """
+                SELECT snapshot_at, SUM(net_liquidation_usd)
+                FROM equity_snapshots
+                WHERE account_id = ? AND snapshot_at >= ?
+                GROUP BY snapshot_at, snapshot_session
+                ORDER BY snapshot_at ASC
+            """
+            params = (account_id, since.isoformat())
+        else:
+            sql = """
+                SELECT snapshot_at, SUM(net_liquidation_usd)
+                FROM equity_snapshots
+                WHERE snapshot_at >= ?
+                GROUP BY snapshot_at, snapshot_session
+                ORDER BY snapshot_at ASC
+            """
+            params = (since.isoformat(),)
+        async with conn.execute(sql, params) as cursor:
+            rows = await cursor.fetchall()
+        return [
+            {"snapshot_at": datetime.fromisoformat(r[0]), "net_liquidation_usd": float(r[1])}
+            for r in rows
+        ]

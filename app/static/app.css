@@ -175,6 +175,19 @@ body {
   color: var(--ph-text-3); font-size: 12px; font-variant-numeric: tabular-nums;
 }
 
+/* Hero sparkline — last ~60 days of NLV. JS populates the inner <path>
+   elements after fetching /api/equity-history; empty (no snapshots / fetch
+   failed) collapses via :empty so the hero doesn't have a 220px hole. */
+.spark {
+  margin-left: auto; align-self: center;
+  width: 220px; height: 48px;
+  flex: 0 0 auto; min-width: 0; overflow: visible;
+}
+.spark:empty { display: none; }
+@media (max-width: 720px) {
+  .spark { display: none; }
+}
+
 /* "Today" line under the hero pill — day-of P&L. Hidden by the template
    when no position has a previous_close (e.g. fresh boot, all CASH). */
 .hero-today {

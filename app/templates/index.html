@@ -23,6 +23,9 @@ title="Toggle light / dark theme">◐</button>
 title="Total unrealized P&amp;L (USD)">{% if totals.pnl_is_positive %}+${{ "{:,.0f}".format(totals.pnl_usd) }}{% else %}-${{ "{:,.0f}".format(-totals.pnl_usd) }}{% endif %}</span>
 <span class="total-pnl-pct {% if totals.pnl_is_positive %}pnl-positive{% else %}pnl-negative{% endif %}"
 title="Unrealized P&amp;L %">{% if totals.pnl_is_positive %}+{% endif %}{{ "{:.2f}".format(totals.pnl_pct) }}%</span>
+<svg class="spark" data-spark
+viewBox="0 0 220 48" width="220" height="48"
+preserveAspectRatio="none" aria-hidden="true"></svg>
 </div>
 {% if totals.has_intraday %}
 <div class="hero-today">

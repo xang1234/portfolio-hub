@@ -119,6 +119,70 @@
         });
     }
 
+    // Hero sparkline. Fetches /api/equity-history (filtered by the active
+    // account in the URL) and renders a stroke+fill SVG path inside the
+    // [data-spark] slot. Color follows first-vs-last sign. The endpoint
+    // returns [] when no snapshots exist or when the app has no Store
+    // attached (tests skip lifespan), in which case .spark:empty in CSS
+    // hides the slot so the hero doesn't keep a 220px hole.
+    function _sparkPath(data, w, h) {
+        const padX = 1, padY = 3;
+        const xs = data.map(d => Date.parse(d.t));
+        const ys = data.map(d => d.v);
+        const xMin = xs[0], xMax = xs[xs.length - 1];
+        const yMin = Math.min.apply(null, ys);
+        const yMax = Math.max.apply(null, ys);
+        const xSpan = (xMax - xMin) || 1;
+        const ySpan = (yMax - yMin) || 1;
+        const px = i => padX + (xs[i] - xMin) / xSpan * (w - 2 * padX);
+        const py = i => h - padY - (ys[i] - yMin) / ySpan * (h - 2 * padY);
+        let d = '';
+        for (let i = 0; i < data.length; i++) {
+            d += (i === 0 ? 'M' : 'L') + px(i).toFixed(1) + ',' + py(i).toFixed(1) + ' ';
+        }
+        const lastX = px(data.length - 1);
+        const fill = d + 'L' + lastX.toFixed(1) + ',' + h + ' L' + padX + ',' + h + ' Z';
+        const isUp = ys[ys.length - 1] >= ys[0];
+        return { stroke: d.trim(), fill, isUp };
+    }
+    function _renderSpark(svg, data) {
+        if (!data || data.length < 2) { svg.innerHTML = ''; return; }
+        const vb = svg.viewBox && svg.viewBox.baseVal;
+        const w = (vb && vb.width)  || 220;
+        const h = (vb && vb.height) ||  48;
+        const { stroke, fill, isUp } = _sparkPath(data, w, h);
+        const colorVar = isUp ? '--ph-pos' : '--ph-neg';
+        // Random gradient id so multiple sparklines on one page (a future
+        // detail panel could embed another) can't collide.
+        const gid = 'sparkfill-' + Math.random().toString(36).slice(2, 8);
+        // Build with raw HTML — innerHTML on an SVG creates SVG children in
+        // the right namespace in every modern browser.
+        svg.innerHTML =
+            '<defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1">' +
+            '<stop offset="0" stop-color="var(' + colorVar + ')" stop-opacity="0.30"/>' +
+            '<stop offset="1" stop-color="var(' + colorVar + ')" stop-opacity="0"/>' +
+            '</linearGradient></defs>' +
+            '<path d="' + fill + '" fill="url(#' + gid + ')"/>' +
+            '<path d="' + stroke + '" fill="none" stroke="var(' + colorVar + ')" ' +
+            'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>';
+    }
+    async function _fetchSparkData(account) {
+        const params = new URLSearchParams({ days: '60' });
+        if (account && account !== 'All') params.set('account', account);
+        try {
+            const res = await fetch('/api/equity-history?' + params.toString(),
+                                    { headers: { 'Accept': 'application/json' } });
+            if (!res.ok) return [];
+            return await res.json();
+        } catch (e) { return []; }
+    }
+    function attachSparkline() {
+        const svg = document.querySelector('[data-spark]');
+        if (!svg) return;
+        const account = new URLSearchParams(window.location.search).get('account');
+        _fetchSparkData(account).then(data => _renderSpark(svg, data));
+    }
+
     // Tick-flash for SSE price updates. We snapshot prices in htmx:beforeSwap
     // (rows are about to be replaced), then in afterSwap compare each new row
     // to its previous value and animate it green/red briefly. Skips rows that
@@ -294,6 +358,7 @@
         applyTheme(readStoredTheme());
         attachThemeToggle();
         attachSearchHandler();
+        attachSparkline();
         tick();
         tickTimestamps();
         initSort();
@@ -413,6 +478,7 @@
         attachThemeToggle();
         attachSearchHandler();
         applySearchToRows();
+        attachSparkline();
         resetTimestampsToNow();
     }
 
