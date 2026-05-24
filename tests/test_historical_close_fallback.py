@@ -1,12 +1,13 @@
-"""When the live ticker doesn't return a last price (international markets
-without paid market-data subscriptions: TSEJ, SBF, IBIS, KRX...), fall
-back to the daily-bar close via reqHistoricalDataAsync.
+"""When the live ticker doesn't return a last price on venues where IB
+historical data is still usable, fall back to the daily-bar close via
+reqHistoricalDataAsync.
 
 reqHistoricalDataAsync is subscription-independent for end-of-day data
 on most exchanges, so this gives us a usable MV for any holding,
 labeled with a "prev close" subtext so users know it's not live.
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -44,7 +45,7 @@ class FakeBar:
 
 
 class _NullTicker:
-    """A ticker with no live data — like what TSEJ/SBF/IBIS return without a sub."""
+    """A ticker with no live data."""
     def __init__(self, contract):
         self.contract = contract
         self.last = -1.0  # IB's "no data" sentinel
@@ -96,15 +97,28 @@ class FakeIB:
 
 
 def _tse_position():
-    contract = FakeContract(conId=14016494, symbol="6315", secType="STK", currency="JPY")
+    contract = FakeContract(conId=14016494, symbol="6315", secType="STK", currency="HKD")
     details = FakeContractDetails(
         contract=FakeContract(
-            conId=14016494, symbol="6315", secType="STK", currency="JPY",
-            primaryExchange="TSEJ",
+            conId=14016494, symbol="6315", secType="STK", currency="HKD",
+            primaryExchange="SEHK",
         ),
         longName="TOYO ENGINEERING CORP",
     )
     pos = FakeIBPosition(account="U1", contract=contract, position=200.0, avgCost=1000.0)
+    return pos, details
+
+
+def _tse_position_with_conid(conid: int, symbol: str):
+    contract = FakeContract(conId=conid, symbol=symbol, secType="STK", currency="HKD")
+    details = FakeContractDetails(
+        contract=FakeContract(
+            conId=conid, symbol=symbol, secType="STK", currency="HKD",
+            primaryExchange="SEHK",
+        ),
+        longName=f"{symbol} CORP",
+    )
+    pos = FakeIBPosition(account="U1", contract=contract, position=100.0, avgCost=1000.0)
     return pos, details
 
 
@@ -118,11 +132,15 @@ async def store(tmp_path):
     await s.close()
 
 
+async def _no_yahoo(_symbol: str) -> float | None:
+    return None
+
+
 # Historical fallback kicks in when ticker has no data ----------------------
 
 
 async def test_uses_historical_close_when_ticker_has_no_last(store):
-    """Japanese stock with no live data → historical close = 1100 JPY → MV = 220,000."""
+    """Stock with no live data → historical close = 1100 HKD → MV = 220,000."""
     pos, details = _tse_position()
     fake_ib = FakeIB(
         positions=[pos],
@@ -134,6 +152,7 @@ async def test_uses_historical_close_when_ticker_has_no_last(store):
     adapter = IbkrAdapter(
         host="ib-gateway", port=4003, client_id=1,
         ib_factory=lambda: fake_ib, store=store,
+        yahoo_quote_fetcher=_no_yahoo,
     )
     await adapter.connect()
     positions = await adapter.get_positions()
@@ -156,6 +175,7 @@ async def test_historical_close_sets_previous_close_flag(store):
     adapter = IbkrAdapter(
         host="ib-gateway", port=4003, client_id=1,
         ib_factory=lambda: fake_ib, store=store,
+        yahoo_quote_fetcher=_no_yahoo,
     )
     await adapter.connect()
     positions = await adapter.get_positions()
@@ -166,16 +186,16 @@ async def test_historical_close_sets_previous_close_flag(store):
 # Live ticker bypasses the fallback ----------------------------------------
 
 
-async def test_live_ticker_does_not_trigger_historical_fetch(store):
-    """When the live ticker has a real price, don't waste a network call
-    on historical data."""
+async def test_live_ticker_used_for_last_price_not_for_fallback(store):
+    """Live ticker wins for last_price; the historical fetch still happens
+    once (cache-amortized across the trading day) so previous_close is
+    available for the intraday %, but it doesn't override the live tick."""
     class LiveIB(FakeIB):
         async def reqTickersAsync(self, *contracts):
-            # Live ticker with last price
             tickers = []
             for c in contracts:
                 t = _NullTicker(c)
-                t.last = 420.0  # Real price
+                t.last = 420.0  # Real live price
                 tickers.append(t)
             return tickers
 
@@ -183,20 +203,25 @@ async def test_live_ticker_does_not_trigger_historical_fetch(store):
     fake_ib = LiveIB(
         positions=[pos],
         details={14016494: details},
-        historical_closes={14016494: 999.0},  # would be wrong if used
+        historical_closes={14016494: 410.0},  # yesterday's close
     )
     from app.adapters.ibkr import IbkrAdapter
 
     adapter = IbkrAdapter(
         host="ib-gateway", port=4003, client_id=1,
         ib_factory=lambda: fake_ib, store=store,
+        yahoo_quote_fetcher=_no_yahoo,
     )
     await adapter.connect()
     positions = await adapter.get_positions()
 
+    # Live tick wins for last_price
     assert positions[0].last_price == pytest.approx(420.0)
     assert positions[0].last_price_is_previous_close is False
-    assert fake_ib.historical_calls == []  # no historical fetch happened
+    # …but the historical fetch still populated previous_close so the
+    # intraday-change % can be computed downstream.
+    assert positions[0].previous_close == pytest.approx(410.0)
+    assert fake_ib.historical_calls == [14016494]
 
 
 # Historical fetch failure → safe degradation ------------------------------
@@ -216,6 +241,7 @@ async def test_historical_fetch_exception_falls_back_to_zero(store):
     adapter = IbkrAdapter(
         host="ib-gateway", port=4003, client_id=1,
         ib_factory=lambda: fake_ib, store=store,
+        yahoo_quote_fetcher=_no_yahoo,
     )
     await adapter.connect()
     positions = await adapter.get_positions()
@@ -238,8 +264,43 @@ async def test_no_historical_bars_returns_zero(store):
     adapter = IbkrAdapter(
         host="ib-gateway", port=4003, client_id=1,
         ib_factory=lambda: fake_ib, store=store,
+        yahoo_quote_fetcher=_no_yahoo,
     )
     await adapter.connect()
     positions = await adapter.get_positions()
 
     assert positions[0].last_price == 0.0
+
+
+async def test_missing_previous_close_fetches_run_concurrently(store):
+    """A portfolio with many unsubscribed markets should not block startup
+    one historical timeout at a time."""
+    pos1, details1 = _tse_position_with_conid(1, "1111")
+    pos2, details2 = _tse_position_with_conid(2, "2222")
+
+    class SlowHistoricalIB(FakeIB):
+        async def reqHistoricalDataAsync(self, contract, **kwargs):
+            self.historical_calls.append(contract.conId)
+            await asyncio.sleep(0.3)
+            return [FakeBar(date=datetime(2026, 5, 14), close=1100.0 + contract.conId)]
+
+    fake_ib = SlowHistoricalIB(
+        positions=[pos1, pos2],
+        details={1: details1, 2: details2},
+        historical_closes={},
+    )
+    from app.adapters.ibkr import IbkrAdapter
+
+    adapter = IbkrAdapter(
+        host="ib-gateway", port=4003, client_id=1,
+        ib_factory=lambda: fake_ib, store=store,
+        yahoo_quote_fetcher=_no_yahoo,
+    )
+    await adapter.connect()
+    positions = await asyncio.wait_for(adapter.get_positions(), timeout=0.45)
+
+    assert {p.native_symbol: p.last_price for p in positions} == {
+        "1111": pytest.approx(1101.0),
+        "2222": pytest.approx(1102.0),
+    }
+    assert sorted(fake_ib.historical_calls) == [1, 2]

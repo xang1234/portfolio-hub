@@ -14,10 +14,14 @@
     // here — NOT at the point where the feature block begins.
     // ──────────────────────────────────────────────────────────────────
 
-    // Drawer + sort persistence (localStorage keys)
-    const DRAWER_KEY = 'portfolio-hub.drawer';
+    // Sort + theme persistence (localStorage keys)
     const SORT_KEY = 'portfolio-hub.sort';
     const DEFAULT_SORT = { key: 'mv_usd', dir: 'desc' };
+    const THEME_KEY = 'portfolio-hub.theme';
+
+    // Map<row-id, last-seen-price> snapshot taken in htmx:beforeSwap so
+    // afterSwap can diff and tick-flash only the rows whose price changed.
+    let _pendingPriceSnapshot = null;
 
     // Pull-to-refresh threshold (px) — ≥ 50 by review rule so casual
     // scroll-bounce doesn't trigger a reload.
@@ -31,15 +35,18 @@
 
     function formatDelta(ms) {
         if (!Number.isFinite(ms)) return '';
-        if (ms <= 0) return '· now';
+        // The countdown now renders on its own line below the transition
+        // (display:block in CSS), so the leading "· " separator from the
+        // inline version is dropped — looks orphaned at the start of a row.
+        if (ms <= 0) return 'now';
         const totalMinutes = Math.floor(ms / 60000);
-        if (totalMinutes < 1) return '· in <1m';
+        if (totalMinutes < 1) return 'in <1m';
         const days = Math.floor(totalMinutes / 1440);
         const hours = Math.floor((totalMinutes % 1440) / 60);
         const minutes = totalMinutes % 60;
-        if (days > 0) return `· in ${days}d ${hours}h`;
-        if (hours > 0) return `· in ${hours}h ${minutes}m`;
-        return `· in ${minutes}m`;
+        if (days > 0) return `in ${days}d ${hours}h`;
+        if (hours > 0) return `in ${hours}h ${minutes}m`;
+        return `in ${minutes}m`;
     }
 
     function tick() {
@@ -56,38 +63,163 @@
         });
     }
 
-    // Plan default: collapsed on portrait/narrow, expanded on desktop.
-    // localStorage override wins so a returning user lands in their
-    // last explicit state regardless of orientation. (DRAWER_KEY
-    // declared at the top of the IIFE — see TDZ note.)
-
-    function syncDrawerDefault() {
-        const drawer = document.querySelector('.market-drawer');
-        if (!drawer) return;
-        if (drawer.dataset.userToggled === 'true') return;
-        let stored = null;
-        try { stored = localStorage.getItem(DRAWER_KEY); } catch (e) {}
-        if (stored === 'open') { drawer.open = true; return; }
-        if (stored === 'closed') { drawer.open = false; return; }
-        drawer.open = window.matchMedia(
-            '(min-width: 768px) and (orientation: landscape)'
-        ).matches;
+    // Manual theme toggle. Cycle: auto (no attr override) → dark → light → auto.
+    // The base.html ships <html data-theme="auto">; we override on user intent
+    // and persist so the choice survives reloads. When the user clears their
+    // override (cycles back to auto), we restore the auto value so the CSS
+    // media query takes over again.
+    function readStoredTheme() {
+        try { return localStorage.getItem(THEME_KEY); } catch (e) { return null; }
     }
-
-    function markUserToggled(e) {
-        // Any user toggle disables the responsive default for this load
-        // AND persists the new state to localStorage for next time.
-        e.currentTarget.dataset.userToggled = 'true';
+    function writeStoredTheme(t) {
         try {
-            localStorage.setItem(DRAWER_KEY, e.currentTarget.open ? 'open' : 'closed');
-        } catch (err) { /* ignore */ }
+            if (t === null) localStorage.removeItem(THEME_KEY);
+            else localStorage.setItem(THEME_KEY, t);
+        } catch (e) { /* ignore */ }
+    }
+    function applyTheme(t) {
+        document.documentElement.setAttribute(
+            'data-theme', (t === 'light' || t === 'dark') ? t : 'auto'
+        );
+    }
+    function cycleTheme() {
+        const cur = readStoredTheme();
+        let next;
+        if (cur === null)         next = 'dark';
+        else if (cur === 'dark')  next = 'light';
+        else                      next = null;  // 'light' → null (back to auto)
+        writeStoredTheme(next);
+        applyTheme(next);
+    }
+    function attachThemeToggle() {
+        document.querySelectorAll('[data-theme-toggle]').forEach(btn => {
+            if (btn.dataset.themeBound) return;
+            btn.dataset.themeBound = 'true';
+            btn.addEventListener('click', cycleTheme);
+        });
     }
 
-    function attachDrawerHandlers() {
-        const drawer = document.querySelector('.market-drawer');
-        if (!drawer || drawer.dataset.bound) return;
-        drawer.dataset.bound = 'true';
-        drawer.addEventListener('toggle', markUserToggled);
+    // Holdings client-side search. Hides rows whose name/ticker don't match
+    // the (case-insensitive) substring. Pure DOM — does not touch the SSE
+    // subscription so live ticks keep flowing into hidden rows.
+    function applySearchToRows() {
+        const input = document.querySelector('[data-holdings-search]');
+        if (!input) return;
+        const q = input.value.trim().toLowerCase();
+        const rows = document.querySelectorAll('#positions-tbody .position-row');
+        rows.forEach(r => {
+            if (!q) { r.hidden = false; return; }
+            const name = (r.getAttribute('data-name-en') || '').toLowerCase();
+            const sym = (r.getAttribute('data-canonical-symbol') || '').toLowerCase();
+            r.hidden = !(name.includes(q) || sym.includes(q));
+        });
+    }
+    function attachSearchHandler() {
+        document.querySelectorAll('[data-holdings-search]').forEach(input => {
+            if (input.dataset.searchBound) return;
+            input.dataset.searchBound = 'true';
+            input.addEventListener('input', applySearchToRows);
+        });
+    }
+
+    // Hero sparkline. Fetches /api/equity-history (filtered by the active
+    // account in the URL) and renders a stroke+fill SVG path inside the
+    // [data-spark] slot. Color follows first-vs-last sign. The endpoint
+    // returns [] when no snapshots exist or when the app has no Store
+    // attached (tests skip lifespan), in which case .spark:empty in CSS
+    // hides the slot so the hero doesn't keep a 220px hole.
+    function _sparkPath(data, w, h) {
+        const padX = 1, padY = 3;
+        const xs = data.map(d => Date.parse(d.t));
+        const ys = data.map(d => d.v);
+        const xMin = xs[0], xMax = xs[xs.length - 1];
+        const yMin = Math.min.apply(null, ys);
+        const yMax = Math.max.apply(null, ys);
+        const xSpan = (xMax - xMin) || 1;
+        const ySpan = (yMax - yMin) || 1;
+        const px = i => padX + (xs[i] - xMin) / xSpan * (w - 2 * padX);
+        const py = i => h - padY - (ys[i] - yMin) / ySpan * (h - 2 * padY);
+        let d = '';
+        for (let i = 0; i < data.length; i++) {
+            d += (i === 0 ? 'M' : 'L') + px(i).toFixed(1) + ',' + py(i).toFixed(1) + ' ';
+        }
+        const lastX = px(data.length - 1);
+        const fill = d + 'L' + lastX.toFixed(1) + ',' + h + ' L' + padX + ',' + h + ' Z';
+        const isUp = ys[ys.length - 1] >= ys[0];
+        return { stroke: d.trim(), fill, isUp };
+    }
+    function _renderSpark(svg, data) {
+        if (!data || data.length < 2) { svg.innerHTML = ''; return; }
+        const vb = svg.viewBox && svg.viewBox.baseVal;
+        const w = (vb && vb.width)  || 220;
+        const h = (vb && vb.height) ||  48;
+        const { stroke, fill, isUp } = _sparkPath(data, w, h);
+        const colorVar = isUp ? '--ph-pos' : '--ph-neg';
+        // Random gradient id so multiple sparklines on one page (a future
+        // detail panel could embed another) can't collide.
+        const gid = 'sparkfill-' + Math.random().toString(36).slice(2, 8);
+        // Build with raw HTML — innerHTML on an SVG creates SVG children in
+        // the right namespace in every modern browser.
+        svg.innerHTML =
+            '<defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1">' +
+            '<stop offset="0" stop-color="var(' + colorVar + ')" stop-opacity="0.30"/>' +
+            '<stop offset="1" stop-color="var(' + colorVar + ')" stop-opacity="0"/>' +
+            '</linearGradient></defs>' +
+            '<path d="' + fill + '" fill="url(#' + gid + ')"/>' +
+            '<path d="' + stroke + '" fill="none" stroke="var(' + colorVar + ')" ' +
+            'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>';
+    }
+    async function _fetchSparkData(account) {
+        const params = new URLSearchParams({ days: '60' });
+        if (account && account !== 'All') params.set('account', account);
+        try {
+            const res = await fetch('/api/equity-history?' + params.toString(),
+                                    { headers: { 'Accept': 'application/json' } });
+            if (!res.ok) return [];
+            return await res.json();
+        } catch (e) { return []; }
+    }
+    function attachSparkline() {
+        const svg = document.querySelector('[data-spark]');
+        if (!svg) return;
+        const account = new URLSearchParams(window.location.search).get('account');
+        _fetchSparkData(account).then(data => _renderSpark(svg, data));
+    }
+
+    // Tick-flash for SSE price updates. We snapshot prices in htmx:beforeSwap
+    // (rows are about to be replaced), then in afterSwap compare each new row
+    // to its previous value and animate it green/red briefly. Skips rows that
+    // didn't change and rows seen for the first time. Direction is taken from
+    // the absolute price delta, not the day-change, so an intraday gainer
+    // that ticks down still flashes red on the dip.
+    function snapshotPricesInto(map) {
+        const rows = document.querySelectorAll('#positions-tbody .position-row');
+        rows.forEach(r => {
+            map.set(r.id, parseFloat(r.getAttribute('data-last-price')) || 0);
+        });
+    }
+    function captureBeforeSwap(e) {
+        const tgt = e && e.detail && e.detail.target;
+        if (!tgt || tgt.id !== 'positions-tbody') return;
+        _pendingPriceSnapshot = new Map();
+        snapshotPricesInto(_pendingPriceSnapshot);
+    }
+    function flashTickedRows() {
+        if (!_pendingPriceSnapshot) return;
+        const snap = _pendingPriceSnapshot;
+        _pendingPriceSnapshot = null;
+        const rows = document.querySelectorAll('#positions-tbody .position-row');
+        rows.forEach(r => {
+            const prev = snap.get(r.id);
+            const next = parseFloat(r.getAttribute('data-last-price')) || 0;
+            if (prev == null || !prev || !next || next === prev) return;
+            const cls = next > prev ? 'tick-flash-up' : 'tick-flash-down';
+            r.classList.remove('tick-flash-up', 'tick-flash-down');
+            // Force reflow so the keyframe animation restarts from 0%.
+            void r.offsetWidth;
+            r.classList.add(cls);
+            setTimeout(() => r.classList.remove(cls), 700);
+        });
     }
 
     // Pull-to-refresh ---------------------------------------------
@@ -226,10 +358,12 @@
     }
 
     function onReady() {
+        applyTheme(readStoredTheme());
+        attachThemeToggle();
+        attachSearchHandler();
+        attachSparkline();
         tick();
         tickTimestamps();
-        syncDrawerDefault();
-        attachDrawerHandlers();
         initSort();
         attachLongPressHandlers();
     }
@@ -339,14 +473,26 @@
     // cards get a countdown immediately. Attach to `document` (not body)
     // because the body itself may be the swap target — a body-scoped
     // listener disappears with the old body element.
-    function postSwapRehydrate() {
+    function postSwapRehydrate(event) {
         tick();
-        attachDrawerHandlers();
+        flashTickedRows();
         initSort();
         attachLongPressHandlers();
+        attachThemeToggle();
+        attachSearchHandler();
+        applySearchToRows();
+        // Refresh the sparkline only on swaps that could change its inputs
+        // (full-body swap from chip filters). SSE row deltas tick many times
+        // per minute and don't move equity-snapshot data, so refetching there
+        // is wasteful and causes constant SVG repaints.
+        const swapTarget = event && event.detail && event.detail.target;
+        if (!swapTarget || swapTarget.id !== 'positions-tbody') {
+            attachSparkline();
+        }
         resetTimestampsToNow();
     }
 
+    document.addEventListener('htmx:beforeSwap', captureBeforeSwap);
     document.addEventListener('htmx:afterSwap', postSwapRehydrate);
     // htmx-ext-sse fires a separate event on incoming SSE messages.
     // Hook it so SSE-only ticks also refresh the "Updated 0:02 ago".

@@ -116,6 +116,22 @@ def test_last_price_is_stale_flag_changes_hash():
     )
 
 
+def test_last_price_is_broker_mark_flag_changes_hash():
+    from app.core.live_positions import hash_position
+
+    assert hash_position(_new_position(last_price_is_broker_mark=False)) != hash_position(
+        _new_position(last_price_is_broker_mark=True)
+    )
+
+
+def test_last_price_is_delayed_flag_changes_hash():
+    from app.core.live_positions import hash_position
+
+    assert hash_position(_new_position(last_price_is_delayed=False)) != hash_position(
+        _new_position(last_price_is_delayed=True)
+    )
+
+
 def test_hash_is_short_string():
     """Used in per-client memory dicts; should be a small, stable string."""
     from app.core.live_positions import hash_position

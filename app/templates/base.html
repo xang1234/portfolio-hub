@@ -1,39 +1,29 @@
 <!DOCTYPE html>
 <html lang="en" data-theme="auto">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="color-scheme" content="light dark">
-<title>{% block title %}portfolio-hub{% endblock %}</title>
-<script>
-/* Apply saved theme before paint (no flash); expose toggle for the header button. */
-(function () {
-  try {
-    var t = localStorage.getItem('ph-theme');
-    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
-  } catch (e) {}
-})();
-function phToggleTheme() {
-  var el = document.documentElement;
-  var cur = el.getAttribute('data-theme');
-  var eff = (cur === 'light' || cur === 'dark')
-    ? cur
-    : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-  var next = eff === 'dark' ? 'light' : 'dark';
-  el.setAttribute('data-theme', next);
-  try { localStorage.setItem('ph-theme', next); } catch (e) {}
-}
-</script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
-<link rel="stylesheet" href="/static/app.css">
-<script src="https://unpkg.com/htmx.org@2.0.4"></script>
-<script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
-<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
-<script src="/static/app.js" defer></script>
-<style>[x-cloak]{display:none!important}</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="color-scheme" content="light dark">
+    <title>{% block title %}portfolio-hub{% endblock %}</title>
+    {# Synchronously apply a stored theme override (set by app.js theme toggle)
+       before stylesheets paint, so users with a non-system preference don't
+       see a one-frame flash of the wrong palette. Default <html data-theme="auto">
+       falls through to the prefers-color-scheme media query. #}
+    <script>(function(){try{var t=localStorage.getItem('portfolio-hub.theme');if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+    {# Inter for UI, IBM Plex Mono for ticker pills. Loaded ahead of Pico
+       + app.css so the @font-face declarations are in the cascade before
+       any element claims them. display=swap so the system fallback shows
+       text while the WOFF2s arrive. #}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <link rel="stylesheet" href="/static/app.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="/static/app.js" defer></script>
+    <style>[x-cloak]{display:none!important}</style>
 </head>
 <body>
 <div class="pull-refresh-indicator" data-pull-indicator aria-hidden="true">↓ Pull to refresh</div>

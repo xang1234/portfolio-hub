@@ -27,7 +27,12 @@ from sse_starlette.sse import EventSourceResponse
 from app.core.broker import Broker, ConnectionState, Position
 from app.core.equity import build_equity_snapshot_row
 from app.core.live_positions import LivePositions, stream_events
-from app.core.markets import STATE_EMOJI, MarketHours, MarketStatus
+from app.core.markets import (
+    STATE_LABEL,
+    MarketHours,
+    MarketStatus,
+    region_color_for_exchange,
+)
 from app.jobs.fills_reconcile import (
     parse_hhmm,
     reconcile_fills,
@@ -141,6 +146,13 @@ def _compute_totals(positions: list[Position]) -> dict:
     Returns a dict the index template can render directly. P&L sign and
     percent are pre-computed here (rather than in the template) so the
     template stays purely declarative.
+
+    `has_intraday` gates the hero's "Today" row: True iff at least one
+    position has both a live last_price and a populated previous_close
+    (i.e. its intraday_change_pct is not None). Without that gate, a
+    fresh boot with no prev-close cache would show "Today $0 (+0.0%)"
+    on a hero that's actually fully populated — misleading flat reading
+    that looks like real flat-day data.
     """
     total_mv_usd = sum(
         p.market_value_usd for p in positions if not p.fx_unavailable
@@ -150,11 +162,28 @@ def _compute_totals(positions: list[Position]) -> dict:
     )
     pnl_pct = (total_pnl_usd / (total_mv_usd - total_pnl_usd) * 100.0
                if (total_mv_usd - total_pnl_usd) != 0 else 0.0)
+
+    intraday_pnl_usd = sum(
+        p.intraday_pnl_usd for p in positions if not p.fx_unavailable
+    )
+    # cost basis at the open ≈ today's MV − today's intraday change in USD
+    intraday_basis_usd = total_mv_usd - intraday_pnl_usd
+    intraday_pnl_pct = (
+        intraday_pnl_usd / intraday_basis_usd * 100.0
+        if intraday_basis_usd > 0 else 0.0
+    )
+    has_intraday = any(
+        p.intraday_change_pct is not None for p in positions
+    )
     return {
         "mv_usd": total_mv_usd,
         "pnl_usd": total_pnl_usd,
         "pnl_pct": pnl_pct,
         "pnl_is_positive": total_pnl_usd >= 0,
+        "intraday_pnl_usd": intraday_pnl_usd,
+        "intraday_pnl_pct": intraday_pnl_pct,
+        "intraday_pnl_is_positive": intraday_pnl_usd >= 0,
+        "has_intraday": has_intraday,
     }
 
 
@@ -240,13 +269,23 @@ def _render_rows_for_filter(
         )
         templates_env.globals["flag_for_exchange"] = flag_for_exchange
         templates_env.globals["flag_for_currency"] = flag_for_currency
+        templates_env.globals["region_color_for_exchange"] = region_color_for_exchange
+    # region_color_for_exchange is on templates_env.globals (above), so the
+    # partial can call it directly without a per-render context key.
     template = templates_env.get_template("partials/holdings_row.html")
+    # Pass totals so the Weight column renders correctly on SSE-streamed
+    # rows too — the partial divides position.market_value_usd by
+    # totals.mv_usd. The total is computed against the filtered set so
+    # weight is "share of what the user is currently looking at", not
+    # share of the whole portfolio (matches the visible allocation bar).
+    totals = _compute_totals(positions)
     return "".join(
         template.render({
             "position": p,
             "flag_for_exchange": flag_for_exchange,
             "market_by_ib": {},
             "active_account": active_account or "All",
+            "totals": totals,
         })
         for p in positions
     )
@@ -381,6 +420,7 @@ def create_app(
 
     templates.env.globals["flag_for_exchange"] = flag_for_exchange
     templates.env.globals["flag_for_currency"] = flag_for_currency
+    templates.env.globals["region_color_for_exchange"] = region_color_for_exchange
 
     def render_rows(positions: list[Position]) -> str:
         """Legacy unfiltered renderer — preserved for callers that
@@ -492,6 +532,32 @@ def create_app(
             if await store.insert_equity_snapshot(**row):
                 inserted += 1
         return JSONResponse({"inserted": inserted})
+
+    @app.get("/api/equity-history")
+    async def equity_history(request: Request, account: str | None = None, days: int = 60):
+        """Time series of NLV (USD) for the hero sparkline.
+
+        ?days= is clamped to [1, 400] — under one year of trading days
+        is the only meaningful display window for a 220px-wide spark.
+        ?account= None or "All" aggregates across every linked account;
+        a specific account_id narrows to that one.
+
+        When no Store is attached (test_create_app paths skip lifespan),
+        we return [] rather than 503 so the client-side sparkline simply
+        no-ops. Same for an empty history before the first snapshot fires.
+        """
+        days_clamped = max(1, min(400, int(days)))
+        store = getattr(request.app.state, "store", None)
+        if store is None:
+            return JSONResponse([])
+        account_filter = None if account in (None, "", "All") else account
+        rows = await store.get_equity_history(
+            days=days_clamped, account_id=account_filter,
+        )
+        return JSONResponse([
+            {"t": r["snapshot_at"].isoformat(), "v": r["net_liquidation_usd"]}
+            for r in rows
+        ])
 
     @app.get("/stream/holdings")
     async def stream_holdings(
@@ -609,9 +675,8 @@ def create_app(
                 "totals": totals,
                 "markets": markets,
                 "market_flag": market_flag,
-                "market_state_emoji": STATE_EMOJI,
+                "market_state_label": STATE_LABEL,
                 "market_by_ib": market_by_ib,
-                "drawer_open": False,
                 "account_summaries": account_summaries,
                 "active_account": active_account,
                 "active_asset": active_asset,

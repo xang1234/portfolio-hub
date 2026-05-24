@@ -16,16 +16,17 @@ data-name-en="{{ position.name_en }}"
 data-asset-class="{{ position.asset_class }}"
 data-row-detail>
 <td class="col-name">
+<div class="holding">
 {% if position.asset_class == 'CASH' %}
 <span class="cash-indicator" title="FX cash balance">💵</span>
 <span class="flag" aria-label="{{ position.currency }}">{{ flag_for_currency(position.currency) }}</span>
 {% elif position.exchange %}
-<span class="flag" aria-label="{{ position.exchange }}">{{ flag_for_exchange(position.exchange) }}</span>
+<span class="flag" style="--region-color: {{ region_color_for_exchange(position.exchange) }}" aria-label="{{ position.exchange }}">{{ flag_for_exchange(position.exchange) }}</span>
 {% endif %}
-<span class="name-en">{{ position.name_en }}</span>
-<span class="native-symbol">
-<span class="tickpill">{{ position.canonical_symbol }}</span>
-{% if position.asset_class == 'CASH' %}<span class="row-tag">CASH</span>{% elif position.exchange %}<span class="row-ex">{{ position.exchange }}</span>{% endif %}
+<div class="holding__body">
+<span class="name-en h-name">{{ position.name_en }}</span>
+<span class="native-symbol h-sub">
+<span class="tickpill">{{ position.native_symbol }}</span>
 {% if position.fx_is_fallback %}
 <span class="fx-fallback-badge" title="FX rate from public-API fallback">📡</span>
 {% endif %}
@@ -40,6 +41,8 @@ title="The price shown is the most recent tick from before this midday session p
 (lunch break{% if row_market.next_transition_local %} — reopens {{ row_market.next_transition_local }}{% endif %})
 </span>
 {% endif %}
+</div>
+</div>
 </td>
 <td class="col-num">{{ "{:,.0f}".format(position.quantity) }}</td>
 <td class="col-num">
@@ -48,28 +51,35 @@ title="The price shown is the most recent tick from before this midday session p
 adds noise without information, so show — instead. #}
 —
 {% elif position.last_price > 0 %}
-{{ "{:,.2f}".format(position.last_price) }}
-{% if position.price_magnifier > 1 %}
-<small class="pence-suffix" title="Quoted in pence (1/100 of {{ position.currency }})">GBp</small>
+<div class="last-wrap">
+{# Line 1: price + inline unit suffix (GBp) and the stale ⚠️ glyph. #}
+<span>{{ "{:,.2f}".format(position.last_price) }}{% if position.price_magnifier > 1 %} <small class="pence-suffix" title="Quoted in pence (1/100 of {{ position.currency }})">GBp</small>{% endif %}{% if position.last_price_is_stale %} <span class="price-stale-badge" title="Broker reconnecting — price hasn't ticked since the disconnect">⚠️</span>{% endif %}</span>
+{# Line 2: today's % move (intraday delta). #}
+{% set _chg = position.intraday_change_pct %}
+{% if _chg is not none %}<span class="chg-pct {% if _chg >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">{% if _chg >= 0 %}+{% endif %}{{ "{:.2f}".format(_chg) }}%</span>{% endif %}
+{# Line 3: price-source provenance tags (prev close / broker mark / delayed)
+   stacked below so they don't widen the column. Wrapped in their own row
+   that allows wrap when multiple tags coexist. #}
+{% if position.last_price_is_previous_close or position.last_price_is_broker_mark or position.last_price_is_delayed %}
+<span class="price-source-tags">
+{% if position.last_price_is_previous_close %}<small class="prev-close-note" title="No live market data; showing previous close">prev close</small>{% endif %}
+{% if position.last_price_is_broker_mark %}<small class="price-source-note price-source-note--broker" title="IB portfolio valuation; updates on the account cadence, about every 3 minutes without a position change">broker mark</small>{% endif %}
+{% if position.last_price_is_delayed %}<small class="price-source-note price-source-note--delayed" title="Delayed or frozen market data from IBKR">delayed</small>{% endif %}
+</span>
 {% endif %}
-{% if position.last_price_is_previous_close %}
-<small class="prev-close-note" title="No live market data; showing previous close">prev close</small>
-{% endif %}
-{% if position.last_price_is_stale %}
-<span class="price-stale-badge" title="Broker reconnecting — price hasn't ticked since the disconnect">⚠️</span>
-{% endif %}
+</div>
 {% else %}—{% endif %}
 </td>
 <td class="col-num">
 {% if position.market_value_native > 0 %}
-{{ "{:,.0f}".format(position.market_value_native) }}<small class="currency">{{ position.currency }}</small>
+<span class="mv-native">{{ "{:,.0f}".format(position.market_value_native) }}<small class="currency">{{ position.currency }}</small></span>
 {% else %}—{% endif %}
 </td>
 <td class="col-num">
 {% if position.fx_unavailable or (position.market_value_usd == 0 and position.currency != 'USD') %}
 —
 {% else %}
-{{ "{:,.0f}".format(position.market_value_usd) }}
+<span class="mv-usd">{{ "{:,.0f}".format(position.market_value_usd) }}</span>
 {% if position.fx_is_stale %}
 <span class="fx-stale-badge" title="FX rate is stale">⚠️</span>
 {% endif %}
@@ -79,7 +89,24 @@ adds noise without information, so show — instead. #}
 {% if position.asset_class == 'CASH' or position.fx_unavailable or (position.market_value_usd == 0 and position.currency != 'USD') %}
 <span class="pnl-na" title="No USD P&amp;L for this row">—</span>
 {% else %}
-<span class="{% if position.unrealized_pnl_usd >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">{% if position.unrealized_pnl_usd >= 0 %}+{% endif %}{{ "{:,.0f}".format(position.unrealized_pnl_usd) }}</span>
+{% set _cost_usd = position.market_value_usd - position.unrealized_pnl_usd %}
+<div class="pnl-stack {% if position.unrealized_pnl_usd >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
+<span class="pnl-usd">{% if position.unrealized_pnl_usd >= 0 %}+{% endif %}{{ "{:,.0f}".format(position.unrealized_pnl_usd) }}</span>
+{% if _cost_usd > 0 %}{% set _pct = position.unrealized_pnl_usd / _cost_usd * 100 %}<span class="pnl-pct">{% if _pct >= 0 %}+{% endif %}{{ "{:.1f}".format(_pct) }}%</span>{% endif %}
+</div>
+{% endif %}
+</td>
+<td class="col-num col-alloc">
+{# Weight as a share of total exposure (USD). `totals` is injected by the
+   index route and by _render_rows_for_filter for SSE streams. When the
+   total is 0 (no positions / all fx-unavailable) or this row has no USD
+   value, render — so the cell still aligns. #}
+{% set _tot = (totals.mv_usd if totals else 0) or 0 %}
+{% if _tot > 0 and position.market_value_usd > 0 and not position.fx_unavailable %}
+{% set _wt = position.market_value_usd / _tot * 100 %}
+<span class="alloc-mini" aria-hidden="true"><span class="alloc-mini__fill" style="width:{{ "{:.1f}".format(_wt) }}%"></span></span><span class="col-alloc__pct">{{ "{:.1f}".format(_wt) }}%</span>
+{% else %}
+<span class="pnl-na">—</span>
 {% endif %}
 </td>
 <td class="col-num col-weight"><span class="wt-bar"><span class="wt-fill"></span></span><span class="wt-pct"></span></td>

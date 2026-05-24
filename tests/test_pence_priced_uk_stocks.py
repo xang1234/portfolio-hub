@@ -46,6 +46,17 @@ class FakeIBPosition:
     avgCost: float
 
 
+@dataclass
+class FakePortfolioItem:
+    account: str
+    contract: FakeContract
+    position: float
+    marketPrice: float
+    marketValue: float
+    averageCost: float
+    unrealizedPNL: float
+
+
 class FakeTicker:
     def __init__(self, contract, last=None):
         self.contract = contract
@@ -56,10 +67,11 @@ class FakeTicker:
 
 
 class FakeIB:
-    def __init__(self, positions, details, last_prices):
+    def __init__(self, positions, details, last_prices, portfolio_items=None):
         self._positions = positions
         self._details = details
         self._last_prices = last_prices
+        self._portfolio_items = portfolio_items or []
         self._connected = False
     async def connectAsync(self, host, port, clientId):
         self._connected = True
@@ -72,6 +84,14 @@ class FakeIB:
         return [d] if d is not None else []
     async def reqTickersAsync(self, *contracts):
         return [FakeTicker(c, last=self._last_prices.get(c.conId)) for c in contracts]
+    def portfolio(self, account: str = ""):
+        if account:
+            return [p for p in self._portfolio_items if p.account == account]
+        return list(self._portfolio_items)
+
+
+async def _fake_yahoo_price(_symbol: str) -> float | None:
+    return 49.60
 
 
 def _iqe_position(*, priceMagnifier: int):
@@ -129,6 +149,7 @@ async def test_pence_priced_iqe_mv_native_in_pounds_not_pence(store, fx_with_gbp
     adapter = IbkrAdapter(
         host="ib-gateway", port=4003, client_id=1,
         ib_factory=lambda: fake_ib, store=store, fx_service=fx_with_gbp,
+        yahoo_quote_fetcher=_fake_yahoo_price,
     )
     await adapter.connect()
     positions = await adapter.get_positions()
@@ -149,6 +170,7 @@ async def test_pence_priced_iqe_pnl_native_in_pounds(store, fx_with_gbp):
     adapter = IbkrAdapter(
         host="ib-gateway", port=4003, client_id=1,
         ib_factory=lambda: fake_ib, store=store, fx_service=fx_with_gbp,
+        yahoo_quote_fetcher=_fake_yahoo_price,
     )
     await adapter.connect()
     positions = await adapter.get_positions()
@@ -169,11 +191,57 @@ async def test_position_carries_price_magnifier_flag(store, fx_with_gbp):
     adapter = IbkrAdapter(
         host="ib-gateway", port=4003, client_id=1,
         ib_factory=lambda: fake_ib, store=store, fx_service=fx_with_gbp,
+        yahoo_quote_fetcher=_fake_yahoo_price,
     )
     await adapter.connect()
     positions = await adapter.get_positions()
 
     assert positions[0].price_magnifier == 100
+
+
+async def test_pence_stock_uses_portfolio_value_without_double_dividing(store, fx_with_gbp):
+    """IB portfolio items report LSE pence stocks in major GBP units.
+
+    When live/Yahoo prices are unavailable, use portfolio marketValue/PNL
+    directly and convert marketPrice back to the display quote unit (GBp).
+    """
+    pos, details = _iqe_position(priceMagnifier=100)
+    pos.avgCost = 0.42214285
+    portfolio_item = FakePortfolioItem(
+        account="U1",
+        contract=details.contract,
+        position=3500.0,
+        marketPrice=0.4571064,
+        marketValue=1599.87,
+        averageCost=0.42214285,
+        unrealizedPNL=122.37,
+    )
+    fake_ib = FakeIB(
+        positions=[pos],
+        details={14075064: details},
+        last_prices={},
+        portfolio_items=[portfolio_item],
+    )
+    from app.adapters.ibkr import IbkrAdapter
+
+    async def no_yahoo(_symbol: str) -> float | None:
+        return None
+
+    adapter = IbkrAdapter(
+        host="ib-gateway", port=4003, client_id=1,
+        ib_factory=lambda: fake_ib, store=store, fx_service=fx_with_gbp,
+        yahoo_quote_fetcher=no_yahoo,
+    )
+    await adapter.connect()
+    positions = await adapter.get_positions()
+
+    p = positions[0]
+    assert p.last_price == pytest.approx(45.71064)
+    assert p.market_value_native == pytest.approx(1599.87)
+    assert p.market_value_usd == pytest.approx(1599.87 * 1.35)
+    assert p.unrealized_pnl_native == pytest.approx(122.37)
+    assert p.unrealized_pnl_usd == pytest.approx(122.37 * 1.35)
+    assert p.last_price_is_broker_mark is True
 
 
 # Default (priceMagnifier=1) leaves everything unchanged --------------------
@@ -200,9 +268,13 @@ async def test_normal_gbp_stock_with_magnifier_1_is_unchanged(store, fx_with_gbp
     )
     from app.adapters.ibkr import IbkrAdapter
 
+    async def fake_yahoo_price(_symbol: str) -> float | None:
+        return 0.60
+
     adapter = IbkrAdapter(
         host="ib-gateway", port=4003, client_id=1,
         ib_factory=lambda: fake_ib, store=store, fx_service=fx_with_gbp,
+        yahoo_quote_fetcher=fake_yahoo_price,
     )
     await adapter.connect()
     positions = await adapter.get_positions()

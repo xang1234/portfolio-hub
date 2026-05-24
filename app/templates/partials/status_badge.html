@@ -1,3 +1,8 @@
+{# Wrapped in a single root element so HTMX can outerHTML-swap the whole
+   status block — pill + (when reconnecting) the calm banner — atomically.
+   The pill stays compact in the top-bar; the banner explains the routine
+   IBKR daily restart so the warn color in the bar doesn't feel like an
+   alarm. #}
 {% if state == "connected" %}
 <span id="ibkr-status"
       class="status-badge status-badge--connected"
@@ -5,11 +10,17 @@
       hx-trigger="every 5s"
       hx-swap="outerHTML">🟢 IBKR connected</span>
 {% elif state == "reconnecting" %}
-<span id="ibkr-status"
-      class="status-badge status-badge--reconnecting"
-      hx-get="/healthz"
-      hx-trigger="every 5s"
-      hx-swap="outerHTML">🟡 IBKR reconnecting{% if backoff_delay is not none %} ({{ backoff_delay|int }}s){% endif %}</span>
+<div id="ibkr-status"
+     class="status-cluster"
+     hx-get="/healthz"
+     hx-trigger="every 5s"
+     hx-swap="outerHTML">
+  <span class="status-badge status-badge--reconnecting">🟡 IBKR reconnecting{% if backoff_delay is not none %} ({{ backoff_delay|int }}s){% endif %}</span>
+  <div class="reconnect-banner" role="status" aria-live="polite">
+    <span class="reconnect-banner__spinner" aria-hidden="true"></span>
+    <span class="reconnect-banner__text"><strong>IBKR reconnecting…</strong> showing last-known prices. This is routine — IBKR restarts once a day.</span>
+  </div>
+</div>
 {% else %}
 <button id="ibkr-status"
         type="button"

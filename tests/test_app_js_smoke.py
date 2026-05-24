@@ -36,13 +36,18 @@ def _run_iife() -> tuple[int, str, str]:
             addEventListener: () => {},
             removeEventListener: () => {},
             body: { addEventListener: () => {} },
+            documentElement: { setAttribute: () => {}, getAttribute: () => null },
         };
         global.window = {
             matchMedia: () => ({ matches: false }),
             location: { reload: () => {} },
             scrollY: 0,
         };
-        global.localStorage = { getItem: () => null, setItem: () => {} };
+        global.localStorage = {
+            getItem: () => null,
+            setItem: () => {},
+            removeItem: () => {},
+        };
         global.setInterval = () => 0;
         global.setTimeout = () => 0;
         global.clearTimeout = () => {};

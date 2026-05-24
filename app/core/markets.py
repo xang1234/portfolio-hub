@@ -90,8 +90,11 @@ _IB_EXCHANGE_TO_DISPLAY: dict[str, str] = {
     "KSE": "KRX",
     "IBIS": "Xetra",
     "FWB": "Xetra",
-    "SBF": "Euronext Paris",
-    "AEB": "Euronext Amsterdam",
+    # Both Paris (SBF) and Amsterdam (AEB) are Euronext; the country flag on
+    # the market card differentiates them so the label can drop the city —
+    # saves horizontal space in the rail when both are open simultaneously.
+    "SBF": "Euronext",
+    "AEB": "Euronext",
     "BM": "BME Madrid",
     "BVME": "Borsa Italiana",
     "SFB": "Stockholm",
@@ -116,16 +119,64 @@ _US_EXTENDED_EXCHANGES: frozenset[str] = frozenset(
 )
 
 
-# Per-state emoji shown in the drawer's collapsed glyph row and inside each
-# market card. Single source of truth — both the panel and the card partial
-# pull from this map so they can never drift apart.
-STATE_EMOJI: dict[str, str] = {
-    "OPEN": "🟢",
-    "EXTENDED": "🌒",
-    "LUNCH": "🟡",
-    "CLOSED": "🔴",
-    "HOLIDAY": "⚫",
+# Text label rendered on each market card. Single source of truth so the
+# rail and any future legend can't drift apart. The redesign uses this
+# label plus a colored state-dot rather than an emoji glyph — emoji alone
+# is unreliable cross-platform (HKEX yellow LUNCH dot vs orange variant)
+# and was the original "meaning carried entirely by emoji" critique.
+STATE_LABEL: dict[str, str] = {
+    "OPEN": "Open",
+    "EXTENDED": "Pre/post",
+    "LUNCH": "Lunch",
+    "CLOSED": "Closed",
+    "HOLIDAY": "Holiday",
 }
+
+
+# Region accent color used as the left stripe on each holding's flag chip.
+# Same palette as the hero allocation bar so a holding's row tile and its
+# slice in the bar visually correspond. Keyed by IB exchange code (the raw
+# value carried on Position.exchange) to skip a display-name lookup at render.
+_IB_EXCHANGE_TO_REGION_COLOR: dict[str, str] = {
+    # Greater China — HK / TW / mainland kept strictly distinct per PLAN.md.
+    "SEHK": "#ef4444",
+    "SEHKNTL": "#ef4444",
+    "SEHKSZSE": "#ef4444",
+    "TWSE": "#10b981",
+    "TPEX": "#10b981",
+    "SSE": "#a855f7",
+    "SZSE": "#a855f7",
+    # Other Asia-Pacific
+    "TSEJ": "#f59e0b",
+    "TSE": "#f59e0b",
+    "OSE": "#f59e0b",
+    "KRX": "#fb7185",
+    "KSE": "#fb7185",
+    "KOSDAQ": "#fb7185",
+    "SGX": "#22d3ee",
+    "ASX": "#84cc16",
+    # Europe — collapsed to one accent; users rarely distinguish at chip size.
+    "LSE": "#94a3b8", "IOB": "#94a3b8",
+    "IBIS": "#a78bfa", "FWB": "#a78bfa",
+    "SBF": "#a78bfa", "AEB": "#a78bfa",
+    "BM": "#a78bfa", "BVME": "#a78bfa",
+    "SFB": "#a78bfa", "EBS": "#a78bfa", "SIX": "#a78bfa",
+    # Americas
+    "NYSE": "#3b82f6",
+    "NASDAQ": "#3b82f6",
+    "ARCA": "#3b82f6",
+    "AMEX": "#3b82f6",
+    "BATS": "#3b82f6",
+    "TSX": "#fb923c",
+}
+
+
+def region_color_for_exchange(ib_exchange: str | None) -> str:
+    """Accent color for the flag-chip left stripe; 'transparent' for cash /
+    unmapped venues so an unfamiliar region doesn't get a misleading tint."""
+    if not ib_exchange:
+        return "transparent"
+    return _IB_EXCHANGE_TO_REGION_COLOR.get(ib_exchange, "transparent")
 
 
 # Exchange-local timezone abbreviations for the "16:00 HKT" line on the
