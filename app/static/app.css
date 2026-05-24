@@ -526,8 +526,12 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 .holdings-table .col-name { width: 1%; max-width: 400px; }
 .holdings-table tbody td {
   padding: 12px 16px; border-bottom: 1px solid var(--ph-border-soft); vertical-align: middle;
-  color: var(--ph-text);
 }
+/* Default row text color via :where() so the rule has zero specificity —
+   .pnl-positive / .pnl-negative (specificity 0,1,0) and any other modifier
+   class win cleanly, even if a future refactor moves the modifier from the
+   .pnl-stack wrapper down to the leaf .pnl-usd / .pnl-pct spans. */
+:where(.holdings-table tbody td) { color: var(--ph-text); }
 .holdings-table tbody tr:last-child td { border-bottom: 0; }
 
 /* Weight column: 46x5 px mini bar (accent-filled) + percentage label.

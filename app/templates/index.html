@@ -219,6 +219,17 @@ sse-swap="snapshot,positions">
 (function () {
   var PALETTE = ['#5b9dff', '#34d399', '#fbbf24', '#f472b6', '#a78bfa',
                  '#fb7185', '#22d3ee', '#84cc16', '#fb923c', '#94a3b8'];
+  // Defense-in-depth escape for any value that lands inside the legend's
+  // innerHTML concatenation. Today's inputs are controlled (IB exchange
+  // codes from a finite set + hardcoded PALETTE colours + emoji flags
+  // harvested from server-rendered markup), so no user-controlled string
+  // flows through. The escape keeps the pattern safe if a future feature
+  // ever lets users name their own holdings or add custom groupings.
+  function _esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
   function buildAllocation() {
     var bar = document.getElementById('ph-alloc-bar');
     var legend = document.getElementById('ph-alloc-legend');
@@ -250,14 +261,15 @@ sse-swap="snapshot,positions">
     bar.innerHTML = entries.map(function (e, i) {
       var pct = e[1] / total * 100;
       return '<span class="alloc-seg" style="width:' + pct + '%;background:'
-        + PALETTE[i % PALETTE.length] + '" title="' + e[0] + ' ' + Math.round(pct) + '%"></span>';
+        + PALETTE[i % PALETTE.length] + '" title="' + _esc(e[0]) + ' '
+        + Math.round(pct) + '%"></span>';
     }).join('');
     if (legend) legend.innerHTML = entries.slice(0, 8).map(function (e, i) {
       var pct = Math.round(e[1] / total * 100);
       var label = keyFlag[e[0]] || e[0];
-      return '<span class="alloc-it" title="' + e[0] + ' ' + pct + '%">'
+      return '<span class="alloc-it" title="' + _esc(e[0]) + ' ' + pct + '%">'
         + '<span class="alloc-sw" style="background:' + PALETTE[i % PALETTE.length] + '"></span>'
-        + label + ' ' + pct + '%</span>';
+        + _esc(label) + ' ' + pct + '%</span>';
     }).join('');
   }
   buildAllocation();

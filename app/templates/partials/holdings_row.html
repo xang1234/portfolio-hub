@@ -53,7 +53,7 @@ adds noise without information, so show — instead. #}
 {% elif position.last_price > 0 %}
 <div class="last-wrap">
 {# Line 1: price + inline unit suffix (GBp) and the stale ⚠️ glyph. #}
-<span class="last-price-line">{{ "{:,.2f}".format(position.last_price) }}{% if position.price_magnifier > 1 %} <small class="pence-suffix" title="Quoted in pence (1/100 of {{ position.currency }})">GBp</small>{% endif %}{% if position.last_price_is_stale %} <span class="price-stale-badge" title="Broker reconnecting — price hasn't ticked since the disconnect">⚠️</span>{% endif %}</span>
+<span>{{ "{:,.2f}".format(position.last_price) }}{% if position.price_magnifier > 1 %} <small class="pence-suffix" title="Quoted in pence (1/100 of {{ position.currency }})">GBp</small>{% endif %}{% if position.last_price_is_stale %} <span class="price-stale-badge" title="Broker reconnecting — price hasn't ticked since the disconnect">⚠️</span>{% endif %}</span>
 {# Line 2: today's % move (intraday delta). #}
 {% set _chg = position.intraday_change_pct %}
 {% if _chg is not none %}<span class="chg-pct {% if _chg >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">{% if _chg >= 0 %}+{% endif %}{{ "{:.2f}".format(_chg) }}%</span>{% endif %}

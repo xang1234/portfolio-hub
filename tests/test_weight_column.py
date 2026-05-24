@@ -104,6 +104,10 @@ def test_weight_renders_dash_when_total_is_zero():
     )
     text = _client([p]).get("/").text
     assert _extract_weight_pcts(text) == []
+    # The cell must actually contain the dash glyph + .pnl-na class — not
+    # just an empty <td>. Without this assertion the test passes even if a
+    # future change removes the {% else %} branch from the row partial.
+    assert 'class="pnl-na">—</span>' in text
     assert "col-alloc" in text  # cell + header still render
 
 
