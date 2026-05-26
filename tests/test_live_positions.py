@@ -121,6 +121,21 @@ def test_replace_all_with_empty_list_clears_all_positions():
     assert live.get_all() == []
 
 
+def test_replace_broker_only_swaps_that_brokers_rows():
+    from app.core.live_positions import LivePositions
+
+    live = LivePositions()
+    ibkr = _new_position(broker="IBKR", canonical_symbol="AAPL.US", native_key="1")
+    old_futu = _new_position(broker="Futu", canonical_symbol="1810.HK", native_key="2")
+    new_futu = _new_position(broker="Futu", canonical_symbol="700.HK", native_key="3")
+    live.replace_all([ibkr, old_futu])
+
+    live.replace_broker("Futu", [new_futu])
+
+    rows = sorted(live.get_all(), key=lambda p: (p.broker, p.canonical_symbol))
+    assert rows == [new_futu, ibkr]
+
+
 # wait_for_change() ------------------------------------------------------------
 
 

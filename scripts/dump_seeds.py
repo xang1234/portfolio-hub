@@ -17,7 +17,7 @@ ENVIRONMENT
 -----------
     DATA_DIR   — directory containing portfolio.db (default ./data)
     IB_HOST    — only used for --table account-summary (default ib-gateway)
-    IB_PORT    — same (default 4001)
+    IB_PORT    — same (default 4003)
 """
 
 import argparse
@@ -116,7 +116,7 @@ async def _dump_account_summary() -> None:
     import random
 
     host = os.environ.get("IB_HOST", "ib-gateway")
-    port = int(os.environ.get("IB_PORT", "4001"))
+    port = int(os.environ.get("IB_PORT", "4003"))
     # Randomize clientId so re-runs (or parallel runs of this script and
     # the verify_read_only_api.py script) don't collide on a single slot
     # and inadvertently kick the dashboard's connection (clientId=1).

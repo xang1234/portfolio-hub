@@ -14,20 +14,20 @@ the gateway-side enforcement is on.
 USAGE
 -----
 Run INSIDE the dashboard container so the script reaches the gateway over
-the internal Docker network (port 4001 is NOT exposed on the host):
+the internal Docker network (port 4003 is NOT exposed on the host):
 
     docker compose run --rm dashboard \\
         .venv/bin/python scripts/verify_read_only_api.py
 
 If you really want to run on the host, you'll need to add a temporary
-`ports: ["127.0.0.1:4001:4001"]` to docker-compose.override.yml AND
+`ports: ["127.0.0.1:4003:4003"]` to docker-compose.override.yml AND
 set IB_HOST=127.0.0.1 — but the container approach is preferred because
 it leaves no port-forward residue behind.
 
 ENVIRONMENT
 -----------
     IB_HOST       (default "ib-gateway" — Docker internal hostname)
-    IB_PORT       (default 4001)
+    IB_PORT       (default 4003)
     IB_CLIENT_ID  (default randomized 50-90 to avoid collisions with the
                    dashboard's clientId=1 and re-runs of this script)
 
@@ -94,7 +94,7 @@ async def main() -> int:
     import random
 
     host = os.environ.get("IB_HOST", "ib-gateway")
-    port = int(os.environ.get("IB_PORT", "4001"))
+    port = int(os.environ.get("IB_PORT", "4003"))
     # Randomize clientId so re-runs don't collide with each other or with
     # the dashboard (clientId=1). Range 50-90 stays clear of common defaults.
     client_id = int(os.environ.get("IB_CLIENT_ID") or random.randint(50, 90))

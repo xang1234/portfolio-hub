@@ -126,7 +126,7 @@ as a quick pre-flight.
 
 ### 2.2 Gateway rejects order placement with read-only error
 
-Port 4001 is internal-only to the Docker network (`expose:` not `ports:` in
+Port 4003 is internal-only to the Docker network (`expose:` not `ports:` in
 `docker-compose.yml`), so run the verification script **inside** the
 dashboard container — that gives it network access to the gateway service:
 

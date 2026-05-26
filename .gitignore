@@ -4,6 +4,7 @@
 
 # Local data
 data/
+.opend/
 *.db
 *.db-shm
 *.db-wal
@@ -23,6 +24,9 @@ venv/
 .idea/
 *.swp
 .DS_Store
+
+# Tooling artifacts
+.playwright-mcp/
 
 # IB Gateway local config (in case anyone bind-mounts instead of named volume)
 jts/

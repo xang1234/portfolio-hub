@@ -4,7 +4,7 @@
 
 A lightweight, mobile-friendly portfolio dashboard for a personal trading setup spanning **four brokers** (IBKR, Futu/MooMoo, Tiger, Longbridge) and multiple Asia/US markets. Hosted on a spare laptop, exposed over Tailscale. The user is currently flying blind across these accounts — no single view of total exposure, no resolved English names for Asian numeric tickers, no awareness of when markets (with their lunch breaks and holidays) are actually open.
 
-**Day-1 outcome**: a single page that shows every IBKR position with English names, native + USD values, P&L in USD, plus a market-status panel that tells the user which markets are open right now and when they next open/close. The architecture is designed so that adding Futu, Tiger, and Longbridge adapters later costs ~150 lines each with no changes to the UI or core logic.
+**Day-1 outcome**: a single page that shows every IBKR position with English names, native + USD values, P&L in USD, plus a market-status panel that tells the user which markets are open right now and when they next open/close. The architecture is designed so that adding additional broker adapters costs little and does not require changes to the UI or core logic.
 
 ---
 
@@ -239,7 +239,7 @@ All new — `portfolio-hub/` is a fresh directory. No existing files modified.
 11. **Filters + Alpine.js polish** — broker/account/asset-class filter chips, URL query-string persistence, sort cycling, row long-press detail card, drawer expand/collapse, `localStorage` for sort + drawer state.
 12. **Operational polish** — disconnected-gateway badge with last-known-prices flagged stale, FX fallback banner, "no positions" empty state, structured logs.
 
-Adapters for Futu / MooMoo / Tiger / Longbridge are **explicitly out of scope for v1** — the Protocol exists so they can be added later as ~150-line files each with no changes to UI, market-hours, FX, or seed-job code.
+Adapters for Tiger / Longbridge are **explicitly out of scope for v1** — the Protocol exists so they can be added later with no changes to UI, market-hours, FX, or seed-job code.
 
 ---
 
@@ -261,7 +261,7 @@ After build:
 
 ## Deferred (explicitly out of scope for v1)
 
-- **Futu / Tiger / Longbridge adapters** — Broker Protocol is ready; adapters added later as ~150-line files each, no UI changes needed.
+- **Tiger / Longbridge adapters** — Broker Protocol is ready; adapters can be added later with no UI changes needed.
 - **Price charts** — TradingView Lightweight Charts library chosen; not wired up.
 - **Equity curve over time UI** — `equity_snapshots` table is being populated from day 1, so the curve will have history when the UI lands.
 - **TWR / XIRR returns** — `pyxirr` is the chosen library; needs `equity_snapshots` + deposits/withdrawals (Flex query later).

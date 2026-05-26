@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date as date_cls, datetime, timedelta, timezone
 from enum import Enum
 from typing import Callable, Literal
 
@@ -301,6 +301,76 @@ class MarketHours:
                 return close
         return None
 
+    def closures_in_range(
+        self, ib_exchange: str, *, start: date_cls, end: date_cls,
+    ) -> list[ExchangeClosure]:
+        """Return weekday closures (full holidays + scheduled early closes)
+        for the inclusive [start, end] date range, in chronological order.
+
+        Weekends are silently skipped — they're expected non-sessions on
+        every supported exchange and would just add noise. Unmapped IB
+        codes return [] (same forgiving contract as status()).
+
+        Early-close detection is driven by `cal.early_closes` (a
+        DatetimeIndex on exchange_calendars >= 4). The early-close time
+        is read from the schedule's `close` column, which the library
+        already adjusts to the half-day close — so the value formatted
+        into `close_local` matches what traders will see at the bell.
+        """
+        mic = mic_for_ib_exchange(ib_exchange)
+        if mic is None:
+            return []
+        cal = self._calendar(mic)
+
+        import pandas as pd
+
+        try:
+            early_close_dates: set[date_cls] = {
+                ts.date() for ts in cal.early_closes
+            }
+        except AttributeError:
+            early_close_dates = set()
+
+        closures: list[ExchangeClosure] = []
+        for ts in pd.date_range(start, end, freq="D"):
+            if ts.weekday() >= 5:
+                continue
+            try:
+                in_session = cal.is_session(ts)
+            except (ValueError, KeyError) as exc:
+                # Out-of-range date or missing schedule entry — log so a
+                # silent regression in the calendar library doesn't just
+                # produce phantom HOLIDAY cards on the dashboard.
+                _LOG.warning(
+                    "is_session failed for mic=%s ts=%s: %s", mic, ts.date(), exc,
+                )
+                in_session = False
+            if not in_session:
+                closures.append(
+                    ExchangeClosure(date=ts.date(), kind="HOLIDAY", close_local=None)
+                )
+                continue
+            if ts.date() in early_close_dates:
+                try:
+                    close_utc = cal.schedule.loc[ts]["close"].to_pydatetime()
+                except (KeyError, AttributeError) as exc:
+                    # `early_closes` said yes but the schedule disagrees —
+                    # shouldn't happen, but if it does, log rather than
+                    # silently dropping a card a user expected to see.
+                    _LOG.warning(
+                        "schedule.loc failed for early-close mic=%s ts=%s: %s",
+                        mic, ts.date(), exc,
+                    )
+                    continue
+                closures.append(
+                    ExchangeClosure(
+                        date=ts.date(),
+                        kind="EARLY_CLOSE",
+                        close_local=_format_local(close_utc, cal, mic),
+                    )
+                )
+        return closures
+
     def status(self, ib_exchange: str) -> MarketStatus | None:
         """Return current MarketStatus for the given IB exchange code,
         or None if the venue isn't mapped (caller skips the row)."""
@@ -437,3 +507,18 @@ class MarketStatus:
     next_transition_local: str
     next_transition_iso: str
     next_transition_label: str
+
+
+@dataclass(frozen=True)
+class ExchangeClosure:
+    """A scheduled non-trading day or early close for one exchange.
+
+    `kind == "HOLIDAY"` is a full-day closure; `close_local` is None.
+    `kind == "EARLY_CLOSE"` is an abbreviated session; `close_local`
+    holds the half-day close formatted in exchange-local time
+    (e.g., "13:00 ET" for the day after Thanksgiving on NYSE).
+    """
+
+    date: date_cls
+    kind: Literal["HOLIDAY", "EARLY_CLOSE"]
+    close_local: str | None
