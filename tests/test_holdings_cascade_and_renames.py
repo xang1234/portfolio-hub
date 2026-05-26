@@ -113,6 +113,41 @@ def test_euronext_venues_display_as_just_euronext(code):
     assert display_name_for_ib_exchange(code) == "Euronext"
 
 
+def test_euronext_paris_and_amsterdam_render_distinct_flags():
+    """When both SBF (Paris) and AEB (Amsterdam) are present, each market
+    card must show its own country flag — Paris 🇫🇷, Amsterdam 🇳🇱. An
+    earlier bug keyed the flag dict by display name; both venues display
+    as "Euronext", so the second insert silently overwrote the first and
+    both cards rendered with the same flag.
+
+    Assertions are scoped to the market-card partial's flag markup
+    (`market-card__flag">🇫🇷` etc., see partials/market_card.html). A
+    page-wide `"🇫🇷" in text` check is too loose — holdings_row.html
+    also emits the country flag per STK row, so the emojis would appear
+    in the rendered HTML even with the rail bug present.
+    """
+    paris = _stk(
+        canonical_symbol="AIR.FR", native_symbol="AIR",
+        exchange="SBF", currency="EUR",
+        name_en="Airbus SE", asset_class="STK",
+    )
+    amsterdam = _stk(
+        canonical_symbol="ASML.NL", native_symbol="ASML",
+        exchange="AEB", currency="EUR",
+        name_en="ASML Holding NV", asset_class="STK",
+    )
+    text = _client([paris, amsterdam]).get("/").text
+
+    # Both flags must appear inside the market-card__flag span — this is
+    # the rail markup specifically, not the holdings-row flag chips.
+    assert 'market-card__flag">🇫🇷' in text, (
+        "Paris market card should render the French flag"
+    )
+    assert 'market-card__flag">🇳🇱' in text, (
+        "Amsterdam market card should render the Dutch flag"
+    )
+
+
 # ---- Price-source tags stack ---------------------------------------------
 
 

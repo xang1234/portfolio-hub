@@ -10,13 +10,14 @@ manages its lifecycle via FastAPI lifespan.
 """
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import asyncio
 import logging
 import os
-from typing import Callable
+from typing import Callable, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -30,6 +31,7 @@ from app.core.live_positions import LivePositions, stream_events
 from app.core.markets import (
     STATE_LABEL,
     MarketHours,
+    MarketState,
     MarketStatus,
     region_color_for_exchange,
 )
@@ -45,17 +47,23 @@ _LOG = logging.getLogger(__name__)
 
 def _markets_from_positions(
     positions: list[Position], hours: MarketHours
-) -> tuple[list[MarketStatus], dict[str, str], dict[str, MarketStatus]]:
-    """Compute one MarketStatus per distinct STK exchange + flag lookup +
-    by-IB-code lookup.
+) -> tuple[list[tuple[MarketStatus, str]], dict[str, MarketStatus], dict[str, str]]:
+    """Compute one (MarketStatus, flag) pair per distinct STK exchange +
+    by-IB-code status lookup + by-IB-code flag lookup.
 
     CASH positions never contribute — they don't pin a venue. Unmapped
     exchange codes (status returns None) are silently dropped so an
     unknown venue doesn't crash the page.
 
-    The third returned value maps an IB exchange code (e.g. "SEHK") to
-    its MarketStatus so per-row template logic (lunch-break subtext)
-    can check the state of the row's own exchange.
+    The pair list (not a dict keyed by display name) is required because
+    multiple IB codes can share a display label — both SBF and AEB render
+    as "Euronext" with different country flags. A display-name-keyed dict
+    silently collapses them onto one flag.
+
+    `status_by_ib_code` lets per-row template logic (lunch-break subtext)
+    check the state of the row's own exchange. `flag_by_ib_code` lets
+    downstream helpers (e.g., the closures strip) reuse the same flag
+    resolution without re-importing `flag_for_exchange`.
     """
     from app.core.symbols import flag_for_exchange
 
@@ -66,20 +74,100 @@ def _markets_from_positions(
         if p.exchange and p.exchange not in seen:
             seen.append(p.exchange)
 
-    markets: list[MarketStatus] = []
-    flag_by_display: dict[str, str] = {}
+    market_cards: list[tuple[MarketStatus, str]] = []
     status_by_ib_code: dict[str, MarketStatus] = {}
+    flag_by_ib_code: dict[str, str] = {}
     for ib_exchange in seen:
         status = hours.status(ib_exchange)
         if status is None:
             continue
-        markets.append(status)
-        status_by_ib_code[ib_exchange] = status
         try:
-            flag_by_display[status.exchange] = flag_for_exchange(ib_exchange)
+            flag = flag_for_exchange(ib_exchange)
         except ValueError:
-            flag_by_display[status.exchange] = ""
-    return markets, flag_by_display, status_by_ib_code
+            flag = ""
+        market_cards.append((status, flag))
+        status_by_ib_code[ib_exchange] = status
+        flag_by_ib_code[ib_exchange] = flag
+    return market_cards, status_by_ib_code, flag_by_ib_code
+
+
+@dataclass(frozen=True)
+class ClosureCard:
+    """One rendered card in the "Closures this week" strip.
+
+    Pre-computed in Python so the template stays presentation-only.
+    `is_today` and `is_past` drive subtle visual modifiers (warm halo
+    on today, dimmed on past days within the visible week).
+    """
+
+    flag: str
+    exchange_display: str
+    date_iso: str               # YYYY-MM-DD for stable sort + data-attr
+    date_label: str             # e.g., "Fri Jul 3"
+    kind: Literal["HOLIDAY", "EARLY_CLOSE"]
+    close_local: str | None
+    is_today: bool
+    is_past: bool
+
+
+def _closures_this_week(
+    status_by_ib_code: dict[str, MarketStatus],
+    flag_by_ib_code: dict[str, str],
+    hours: MarketHours,
+    *,
+    now: datetime,
+) -> list[ClosureCard]:
+    """Build a flat list of closure cards across all held exchanges for the
+    current ISO week (Mon..Fri in UTC), ordered by date then exchange.
+
+    Held-only by design — matches the live market rail's behavior. The UTC
+    week boundary is a pragmatic compromise: a single global reference
+    avoids per-exchange "which day is it" ambiguity, at the cost of an
+    Asia user briefly seeing Monday's closures listed under "this week"
+    even after their local Monday has begun.
+
+    Today-deduplication: when today is itself a full holiday for an
+    exchange, the live market card already shows "Holiday" with the next
+    open time. Repeating that as a "Closed <today>" card in the strip is
+    visual noise, so we skip it. Today early closes are NOT deduped —
+    the live card shows "Open" / "Closes 13:00 ET" and the strip's
+    "Early close" label is the explicit advance warning the strip exists
+    to provide.
+
+    Date label uses `%-d` (GNU/POSIX strftime extension) for non-padded
+    day-of-month — fine on the Linux container the app ships in; would
+    raise ValueError on Windows.
+    """
+    today_utc = now.date()
+    monday = today_utc - timedelta(days=today_utc.weekday())
+    friday = monday + timedelta(days=4)
+
+    dated_cards: list[tuple[date, ClosureCard]] = []
+    for ib_code, status in status_by_ib_code.items():
+        flag = flag_by_ib_code.get(ib_code, "")
+        for closure in hours.closures_in_range(ib_code, start=monday, end=friday):
+            is_today = closure.date == today_utc
+            if (
+                is_today
+                and closure.kind == "HOLIDAY"
+                and status.state == MarketState.HOLIDAY
+            ):
+                # Already conveyed by the live market card — skip.
+                continue
+            card = ClosureCard(
+                flag=flag,
+                exchange_display=status.exchange,
+                date_iso=closure.date.isoformat(),
+                date_label=closure.date.strftime("%a %b %-d"),
+                kind=closure.kind,
+                close_local=closure.close_local,
+                is_today=is_today,
+                is_past=(closure.date < today_utc),
+            )
+            dated_cards.append((closure.date, card))
+
+    dated_cards.sort(key=lambda dc: (dc[0], dc[1].exchange_display))
+    return [card for _, card in dated_cards]
 
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -99,6 +187,30 @@ _STATE_STRINGS = {
 
 def _state_to_string(state: ConnectionState) -> str:
     return _STATE_STRINGS[state]
+
+
+async def _broker_status_map(broker_ref: Broker) -> dict[str, str]:
+    """Return healthz JSON keyed by broker name.
+
+    Single adapters expose only get_connection_state(); CompositeBroker adds
+    get_connection_states() so clients can see which enabled broker is down.
+    """
+    states_getter = getattr(broker_ref, "get_connection_states", None)
+    if callable(states_getter):
+        states = await states_getter()
+        return {name.lower(): _state_to_string(state) for name, state in states.items()}
+    return {
+        getattr(broker_ref, "name", "broker").lower(): _state_to_string(
+            await broker_ref.get_connection_state()
+        )
+    }
+
+
+def _status_label(statuses: dict[str, str]) -> str:
+    if len(statuses) <= 1:
+        name = next(iter(statuses), "ibkr")
+        return {"ibkr": "IBKR", "futu": "Futu"}.get(name, name.upper())
+    return "Brokers"
 
 
 def _log_loop_crash(name: str) -> Callable[[asyncio.Task], None]:
@@ -205,6 +317,76 @@ def _enabled_brokers() -> frozenset[str]:
         if canonical:
             out.add(canonical)
     return frozenset(out) or frozenset({"IBKR"})
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_optional_bool(name: str) -> bool | None:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return None
+    return _env_bool(name)
+
+
+def _env_list(name: str, default: str) -> tuple[str, ...]:
+    return tuple(
+        token.strip()
+        for token in os.environ.get(name, default).split(",")
+        if token.strip()
+    )
+
+
+def _build_production_broker(
+    *,
+    store,
+    live_positions: LivePositions,
+    fx_service,
+) -> Broker:
+    enabled = _enabled_brokers()
+    adapters: list[Broker] = []
+    if "IBKR" in enabled:
+        from app.adapters.ibkr import IbkrAdapter
+
+        adapters.append(
+            IbkrAdapter(
+                host=os.environ.get("IB_HOST", "ib-gateway"),
+                port=int(os.environ.get("IB_PORT", "4003")),
+                client_id=int(os.environ.get("IB_CLIENT_ID", "1")),
+                store=store,
+                live_positions=live_positions,
+                fx_service=fx_service,
+            )
+        )
+    if "Futu" in enabled:
+        from app.adapters.futu import FutuAdapter
+
+        adapters.append(
+            FutuAdapter(
+                host=os.environ.get("FUTU_HOST", "host.docker.internal"),
+                port=int(os.environ.get("FUTU_PORT", "11111")),
+                markets=_env_list("FUTU_MARKETS", "HK,US,SG"),
+                security_firm=os.environ.get("FUTU_SECURITY_FIRM", "FUTUSG"),
+                trd_env=os.environ.get("FUTU_TRD_ENV", "REAL"),
+                is_encrypt=_env_optional_bool("FUTU_ENCRYPT"),
+                refresh_cache=_env_bool("FUTU_REFRESH_CACHE", False),
+                fx_service=fx_service,
+                live_positions=live_positions,
+                poll_interval_s=float(os.environ.get("FUTU_POLL_INTERVAL_S", "30")),
+            )
+        )
+    if not adapters:
+        raise RuntimeError("No enabled broker adapters configured")
+    if len(adapters) == 1:
+        return adapters[0]
+
+    from app.core.composite_broker import CompositeBroker
+
+    return CompositeBroker(adapters)
 
 
 def _apply_filters(
@@ -326,7 +508,6 @@ def create_app(
     async def lifespan(app: FastAPI):
         nonlocal broker, store, fx_service, reconcile_task, snapshot_task
         if manage_lifecycle:
-            from app.adapters.ibkr import IbkrAdapter
             from app.core.fx import FxService
             from app.db.store import Store
 
@@ -347,10 +528,7 @@ def create_app(
             await fx_service.start()
             app.state.fx_service = fx_service
 
-            broker = IbkrAdapter(
-                host=os.environ.get("IB_HOST", "ib-gateway"),
-                port=int(os.environ.get("IB_PORT", "4003")),
-                client_id=int(os.environ.get("IB_CLIENT_ID", "1")),
+            broker = _build_production_broker(
                 store=store,
                 live_positions=live_positions,
                 fx_service=fx_service,
@@ -436,6 +614,7 @@ def create_app(
         broker_ref = request.app.state.broker
         conn_state = await broker_ref.get_connection_state()
         state = _state_to_string(conn_state)
+        statuses = await _broker_status_map(broker_ref)
         if _is_htmx_request(request):
             # Only the IBKR adapter exposes current_backoff_delay() today —
             # other adapters can opt in by implementing the same shape.
@@ -444,9 +623,13 @@ def create_app(
             return templates.TemplateResponse(
                 request=request,
                 name="partials/status_badge.html",
-                context={"state": state, "backoff_delay": backoff_delay},
+                context={
+                    "state": state,
+                    "backoff_delay": backoff_delay,
+                    "broker_label": _status_label(statuses),
+                },
             )
-        return JSONResponse({"ibkr": state})
+        return JSONResponse(statuses)
 
     @app.post("/healthz/retry")
     async def healthz_retry(request: Request):
@@ -459,19 +642,25 @@ def create_app(
         """
         broker = request.app.state.broker
         conn_state = await broker.get_connection_state()
-        if conn_state == ConnectionState.DISCONNECTED:
+        retry_disconnected = getattr(broker, "retry_disconnected", None)
+        if callable(retry_disconnected):
+            await retry_disconnected()
+            conn_state = await broker.get_connection_state()
+        elif conn_state == ConnectionState.DISCONNECTED:
             start = getattr(broker, "start", None)
             if callable(start):
                 await start()
             conn_state = await broker.get_connection_state()
         delay_getter = getattr(broker, "current_backoff_delay", None)
         backoff_delay = delay_getter() if callable(delay_getter) else None
+        statuses = await _broker_status_map(broker)
         return templates.TemplateResponse(
             request=request,
             name="partials/status_badge.html",
             context={
                 "state": _state_to_string(conn_state),
                 "backoff_delay": backoff_delay,
+                "broker_label": _status_label(statuses),
             },
         )
 
@@ -608,6 +797,7 @@ def create_app(
         live = request.app.state.live_positions
         conn_state = await broker.get_connection_state()
         state = _state_to_string(conn_state)
+        broker_states = await _broker_status_map(broker)
         delay_getter = getattr(broker, "current_backoff_delay", None)
         backoff_delay = delay_getter() if callable(delay_getter) else None
         # Prefer the live, tick-updated snapshot when it has data; otherwise
@@ -647,8 +837,8 @@ def create_app(
         else:
             shown_positions = [p for p in shown_positions if p.asset_class == active_asset]
 
-        # Broker filter. V1 only enables IBKR; the dimension is here so
-        # future Futu/Tiger/Longbridge adapters slot in without UI churn.
+        # Broker filter. Enabled brokers are selectable; disabled known
+        # brokers stay visible as future dimensions.
         enabled_brokers = _enabled_brokers()
         active_broker = broker_filter
         if active_broker not in enabled_brokers:
@@ -662,8 +852,12 @@ def create_app(
         totals = _compute_totals(shown_positions)
         # Market panel uses all visible exchanges; under a filter that's
         # the filtered set, otherwise everything.
-        markets, market_flag, market_by_ib = _markets_from_positions(
+        market_cards, market_by_ib, flag_by_ib = _markets_from_positions(
             shown_positions, market_hours,
+        )
+        closures_this_week = _closures_this_week(
+            market_by_ib, flag_by_ib, market_hours,
+            now=datetime.now(timezone.utc),
         )
         return templates.TemplateResponse(
             request=request,
@@ -673,8 +867,8 @@ def create_app(
                 "backoff_delay": backoff_delay,
                 "positions": shown_positions,
                 "totals": totals,
-                "markets": markets,
-                "market_flag": market_flag,
+                "market_cards": market_cards,
+                "closures_this_week": closures_this_week,
                 "market_state_label": STATE_LABEL,
                 "market_by_ib": market_by_ib,
                 "account_summaries": account_summaries,
@@ -683,6 +877,8 @@ def create_app(
                 "active_broker": active_broker,
                 "enabled_brokers": list(enabled_brokers),
                 "all_known_brokers": _ALL_KNOWN_BROKERS,
+                "broker_states": broker_states,
+                "broker_label": _status_label(broker_states),
                 "updated_at_iso": datetime.now(timezone.utc).isoformat(),
             },
         )

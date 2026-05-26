@@ -1,0 +1,23 @@
+{# One closure card in the "this week" strip. Variables:
+   - c : ClosureCard
+     • c.flag, c.exchange_display, c.date_iso, c.date_label
+     • c.kind in {"HOLIDAY", "EARLY_CLOSE"}
+     • c.close_local (string for EARLY_CLOSE, None for HOLIDAY)
+     • c.is_today, c.is_past
+
+   Reuses .market-card to inherit the live-rail visual vocabulary (flag
+   chip, padding, border-radius). The kind drives the left stripe colour
+   via .market-card--holiday / .market-card--early-close; today gets a
+   warm halo, past days fade.
+#}
+{% set kind_modifier = 'holiday' if c.kind == 'HOLIDAY' else 'early-close' %}
+<article class="market-card market-card--closure market-card--{{ kind_modifier }}{% if c.is_today %} market-card--today{% endif %}{% if c.is_past %} market-card--past{% endif %}" data-date="{{ c.date_iso }}">
+<div class="market-card__head">
+<span class="market-card__flag">{{ c.flag }}</span>
+<span class="market-card__exchange">{{ c.exchange_display }}</span>
+</div>
+<div class="market-card__state-label market-card__state-label--{{ kind_modifier }}">{% if c.kind == 'HOLIDAY' %}Closed{% else %}Early close{% endif %}</div>
+<p class="market-card__transition">
+<time datetime="{{ c.date_iso }}">{{ c.date_label }}</time>{% if c.close_local %} · {{ c.close_local }}{% endif %}
+</p>
+</article>

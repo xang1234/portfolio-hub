@@ -8,17 +8,17 @@
       class="status-badge status-badge--connected"
       hx-get="/healthz"
       hx-trigger="every 5s"
-      hx-swap="outerHTML">🟢 IBKR connected</span>
+      hx-swap="outerHTML">🟢 {{ broker_label|default('IBKR') }} connected</span>
 {% elif state == "reconnecting" %}
 <div id="ibkr-status"
      class="status-cluster"
      hx-get="/healthz"
      hx-trigger="every 5s"
      hx-swap="outerHTML">
-  <span class="status-badge status-badge--reconnecting">🟡 IBKR reconnecting{% if backoff_delay is not none %} ({{ backoff_delay|int }}s){% endif %}</span>
+  <span class="status-badge status-badge--reconnecting">🟡 {{ broker_label|default('IBKR') }} reconnecting{% if backoff_delay is not none %} ({{ backoff_delay|int }}s){% endif %}</span>
   <div class="reconnect-banner" role="status" aria-live="polite">
     <span class="reconnect-banner__spinner" aria-hidden="true"></span>
-    <span class="reconnect-banner__text"><strong>IBKR reconnecting…</strong> showing last-known prices. This is routine — IBKR restarts once a day.</span>
+    <span class="reconnect-banner__text"><strong>{{ broker_label|default('IBKR') }} reconnecting…</strong> showing last-known prices.</span>
   </div>
 </div>
 {% else %}
@@ -27,5 +27,5 @@
         class="status-badge status-badge--disconnected status-badge--retry"
         hx-post="/healthz/retry"
         hx-trigger="click"
-        hx-swap="outerHTML">🔴 IBKR disconnected — click to retry</button>
+        hx-swap="outerHTML">🔴 {{ broker_label|default('IBKR') }} disconnected — click to retry</button>
 {% endif %}

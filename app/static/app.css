@@ -468,6 +468,19 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   color: var(--ph-text-3); font-variant-numeric: tabular-nums; line-height: 1.2;
 }
 
+/* ---- 7b. CLOSURES THIS WEEK STRIP ----------------------------------------- */
+/* Sibling of the live market rail. Lists held exchanges' Mon–Fri closures
+   (full holidays + early closes) sourced from exchange_calendars. Reuses
+   .market-card so visual vocabulary stays consistent; only the kind +
+   today/past modifiers are net-new. */
+.market-section--closures { margin-top: 8px; }
+.market-card--early-close { border-left-color: var(--ph-warn); }
+.market-card__state-label--early-close { color: var(--ph-warn); }
+.market-card--past { opacity: 0.55; }
+.market-card--today {
+  box-shadow: 0 0 0 1px var(--ph-warn-soft), 0 0 0 3px color-mix(in srgb, var(--ph-warn) 18%, transparent);
+}
+
 /* ---- 8. HOLDINGS CARD + TABLE -------------------------------------------- */
 /* The card uses --ph-surface-2 so it sits a tone above the body, distinct
    from the lighter hero/market-card surfaces — gives the holdings table a

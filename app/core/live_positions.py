@@ -51,6 +51,23 @@ class LivePositions:
         self._positions = new_map
         self._changed.set()
 
+    def replace_broker(self, broker: str, positions: list[Position]) -> None:
+        """Replace only one broker's rows, preserving every other broker.
+
+        Polling adapters use this to refresh their namespace without clearing
+        rows that a streaming adapter such as IBKR owns in the same store.
+        """
+        new_map = {
+            key: position
+            for key, position in self._positions.items()
+            if key[0] != broker
+        }
+        new_map.update({_key(p): p for p in positions})
+        if new_map == self._positions:
+            return
+        self._positions = new_map
+        self._changed.set()
+
     async def wait_for_change(self) -> None:
         """Block until at least one change has happened since the last call.
 

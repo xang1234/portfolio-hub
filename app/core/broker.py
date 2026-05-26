@@ -1,7 +1,7 @@
 """Broker abstraction layer.
 
 The Broker Protocol is the keystone of multi-broker support. Each adapter
-(IBKR in v1, Futu/Tiger/Longbridge later) implements this contract; the rest
+(IBKR, Futu/Moomoo, and later Tiger/Longbridge) implements this contract; the rest
 of the app operates on the normalized Position / AccountSummary types and
 never touches vendor SDKs directly.
 """

@@ -16,11 +16,12 @@ services:
     volumes:
       - ib-gateway-config:/home/ibgateway/Jts
       - ./gateway/jts.ini.tmpl:/home/ibgateway/Jts/jts.ini.tmpl:ro
-    # Port 4001/4002 are NOT exposed to the host. Only the dashboard service
-    # reaches the gateway, over the internal Docker network.
+    # Ports are NOT published to the host. The gnzsnz image keeps Gateway's
+    # native 4001/4002 ports on loopback and exposes socat forwarders on
+    # 4003/4004 for other containers on the Docker network.
     expose:
-      - "4001"
-      - "4002"
+      - "4003"
+      - "4004"
 
   dashboard:
     build: .
@@ -28,9 +29,17 @@ services:
     restart: unless-stopped
     environment:
       IB_HOST: ${IB_HOST:-ib-gateway}
-      IB_PORT: ${IB_PORT:-4001}
+      IB_PORT: ${IB_PORT:-4003}
       IB_CLIENT_ID: ${IB_CLIENT_ID:-1}
       BROKERS_ENABLED: ${BROKERS_ENABLED:-ibkr}
+      FUTU_HOST: ${FUTU_HOST:-host.docker.internal}
+      FUTU_PORT: ${FUTU_PORT:-11111}
+      FUTU_MARKETS: ${FUTU_MARKETS:-HK,US,SG}
+      FUTU_SECURITY_FIRM: ${FUTU_SECURITY_FIRM:-FUTUSG}
+      FUTU_TRD_ENV: ${FUTU_TRD_ENV:-REAL}
+      FUTU_REFRESH_CACHE: ${FUTU_REFRESH_CACHE:-false}
+      FUTU_POLL_INTERVAL_S: ${FUTU_POLL_INTERVAL_S:-30}
+      FUTU_ENCRYPT: ${FUTU_ENCRYPT:-}
       TZ: ${TZ:-Asia/Singapore}
     volumes:
       - ./data:/app/data

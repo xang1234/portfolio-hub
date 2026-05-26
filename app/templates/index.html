@@ -11,7 +11,8 @@
 <span class="app-bar__spacer"></span>
 <span class="conn-dots" aria-label="Broker connections">
 {% for b in all_known_brokers %}
-<span class="cdot{% if b in enabled_brokers %}{% if b == 'IBKR' and state != 'connected' %} off{% else %} on{% endif %}{% else %} idle{% endif %}" title="{{ b }}{% if b not in enabled_brokers %} — not enabled{% endif %}"></span>
+{% set b_state = broker_states.get(b|lower, 'disconnected') %}
+<span class="cdot{% if b in enabled_brokers %}{% if b_state == 'connected' %} on{% else %} off{% endif %}{% else %} idle{% endif %}" title="{{ b }}{% if b not in enabled_brokers %} — not enabled{% else %} — {{ b_state }}{% endif %}"></span>
 {% endfor %}
 </span>
 {% include "partials/status_badge.html" %}
@@ -53,16 +54,26 @@ title="Day-of P&amp;L (USD)">{% if totals.intraday_pnl_is_positive %}+{% endif %
 </div>
 </section>
 {% endif %}
-{% if markets %}
+{% if market_cards %}
 <section class="market-section" aria-label="Market hours">
 <div class="market-rail-head">
 <span class="market-rail-head__label">Markets</span>
 </div>
 <div class="market-rail">
-{% for m in markets %}
-{% with market=m, flag=market_flag[m.exchange] %}
+{% for market, flag in market_cards %}
 {% include "partials/market_card.html" %}
-{% endwith %}
+{% endfor %}
+</div>
+</section>
+{% endif %}
+{% if closures_this_week %}
+<section class="market-section market-section--closures" aria-label="Market closures this week">
+<div class="market-rail-head">
+<span class="market-rail-head__label">Closures this week</span>
+</div>
+<div class="market-rail">
+{% for c in closures_this_week %}
+{% include "partials/closure_card.html" %}
 {% endfor %}
 </div>
 </section>
@@ -291,8 +302,8 @@ sse-swap="snapshot,positions">
     var s = document.getElementById('ph-search');
     if (s && !s._phWired) { s._phWired = true; s.addEventListener('input', applySearch); }
   }
-  build(); wireSearch();
-  document.body.addEventListener('htmx:afterSwap', function () { build(); wireSearch(); applySearch(); });
+  buildAllocation(); wireSearch();
+  document.body.addEventListener('htmx:afterSwap', function () { buildAllocation(); wireSearch(); applySearch(); });
 })();
 </script>
 {% endblock %}
