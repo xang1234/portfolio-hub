@@ -182,16 +182,6 @@ surfaces to build on them:
 - **Dual-listed instruments stay separate.** `9988.HK` and `BABA.US` are different rows with different cost bases, by design.
 - **Credentials never enter this app.** IBKR creds live in IB Gateway; MooMoo creds live in OpenD. portfolio-hub holds neither.
 
-## Operations
-
-- **Before going live**, work through [`docs/HITL-GOLIVE.md`](./docs/HITL-GOLIVE.md) — the human-in-the-loop verification checklist that gates "ready for daily use." Covers the Tailscale boundary, read-only API enforcement, data-vs-TWS spot checks, market-hours panel accuracy, reconnect resilience, privacy logging, and seed-job sanity.
-- Supporting scripts in [`scripts/`](./scripts):
-  - `serve_mock.py` — runs the dashboard against an in-memory mock portfolio for screenshots/demos.
-  - `setup_opend.py` — installs/starts/checks the local MooMoo/Futu OpenD copy.
-  - `verify_read_only_api.py` — confirms the gateway rejects order placement.
-  - `audit_privacy_log.sh` — greps logs for dollar-amount leaks at non-DEBUG levels.
-  - `dump_seeds.py` — prints recent `equity_snapshots` / `fills` rows + live account-summary for TWS comparison.
-
 ## License & trademarks
 
 Apache 2.0 — see [LICENSE](./LICENSE) and [NOTICE](./NOTICE). Includes an explicit
