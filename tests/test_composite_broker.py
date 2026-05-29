@@ -174,6 +174,45 @@ def test_healthz_reports_each_child_broker_for_composite_broker():
     }
 
 
+def test_healthz_reports_longbridge_broker():
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    app = create_app(broker=_Adapter("Longbridge", state=ConnectionState.CONNECTED))
+
+    response = TestClient(app).get("/healthz")
+
+    assert response.json() == {"longbridge": "connected"}
+
+
+def test_build_production_broker_includes_longbridge_when_enabled(monkeypatch):
+    from app.core.live_positions import LivePositions
+    from app.main import _build_production_broker
+
+    class _FakeLongbridgeAdapter(_Adapter):
+        def __init__(self, **kwargs):
+            super().__init__("Longbridge")
+            self.kwargs = kwargs
+
+    monkeypatch.setenv("BROKERS_ENABLED", "longbridge")
+    monkeypatch.setenv("LONGBRIDGE_POSITION_CHANNEL", "FUND")
+    monkeypatch.setattr(
+        "app.adapters.longbridge.LongbridgeAdapter",
+        _FakeLongbridgeAdapter,
+    )
+
+    broker = _build_production_broker(
+        store=object(),
+        live_positions=LivePositions(),
+        fx_service=object(),
+    )
+
+    assert broker.name == "Longbridge"
+    assert broker.kwargs["account_id"] == "Longbridge"
+    assert broker.kwargs["position_channel"] == "FUND"
+
+
 def test_healthz_retry_restarts_disconnected_child_in_composite_broker():
     from fastapi.testclient import TestClient
 

@@ -129,3 +129,11 @@ def test_account_chip_url_carries_active_broker():
     # asset chips should include broker=IBKR
     text = response.text
     assert "broker=IBKR" in text and "asset=STK" in text
+
+
+def test_longbridge_chip_is_clickable_when_enabled(monkeypatch):
+    monkeypatch.setenv("BROKERS_ENABLED", "ibkr,longbridge")
+
+    response = _client([_pos()]).get("/")
+
+    assert "?broker=Longbridge" in response.text

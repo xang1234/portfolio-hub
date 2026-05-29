@@ -234,7 +234,11 @@ async def _broker_status_map(broker_ref: Broker) -> dict[str, str]:
 def _status_label(statuses: dict[str, str]) -> str:
     if len(statuses) <= 1:
         name = next(iter(statuses), "ibkr")
-        return {"ibkr": "IBKR", "futu": "Futu"}.get(name, name.upper())
+        return {
+            "ibkr": "IBKR",
+            "futu": "Futu",
+            "longbridge": "Longbridge",
+        }.get(name, name.upper())
     return "Brokers"
 
 
@@ -412,6 +416,21 @@ def _build_production_broker(
                 fx_service=fx_service,
                 live_positions=live_positions,
                 poll_interval_s=float(os.environ.get("FUTU_POLL_INTERVAL_S", "30")),
+            )
+        )
+    if "Longbridge" in enabled:
+        from app.adapters.longbridge import LongbridgeAdapter
+
+        adapters.append(
+            LongbridgeAdapter(
+                account_id=os.environ.get("LONGBRIDGE_ACCOUNT_ID", "Longbridge"),
+                position_channel=os.environ.get("LONGBRIDGE_POSITION_CHANNEL") or None,
+                base_currency=os.environ.get("LONGBRIDGE_BASE_CURRENCY", "USD"),
+                fx_service=fx_service,
+                live_positions=live_positions,
+                poll_interval_s=float(
+                    os.environ.get("LONGBRIDGE_POLL_INTERVAL_S", "30")
+                ),
             )
         )
     if not adapters:
@@ -676,8 +695,7 @@ def create_app(
         state = _state_to_string(conn_state)
         statuses = await _broker_status_map(broker_ref)
         if _is_htmx_request(request):
-            # Only the IBKR adapter exposes current_backoff_delay() today —
-            # other adapters can opt in by implementing the same shape.
+            # Adapters can opt in to exposing reconnect backoff with this shape.
             delay_getter = getattr(broker_ref, "current_backoff_delay", None)
             backoff_delay = delay_getter() if callable(delay_getter) else None
             return templates.TemplateResponse(
