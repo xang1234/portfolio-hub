@@ -19,16 +19,18 @@ No real cash leaving the device that's running this.
 Most portfolio aggregators either ingest a CSV (stale by the time it loads),
 scrape brokerage websites (fragile, slow, blocked), or sit in front of an
 account-linking middleman (your credentials, their server). **portfolio-hub talks
-directly to the gateways your brokers already publish** — IB Gateway and
-MooMoo/Futu OpenD — runs on a spare laptop on your tailnet, and shows exactly
-what's in your accounts right now. The only network surface is the Tailscale
-boundary, and your credentials never enter the app.
+directly to the APIs your brokers already publish** — IB Gateway, MooMoo/Futu
+OpenD, and Longbridge OpenAPI — runs on a spare laptop on your tailnet, and
+shows exactly what's in your accounts right now. The only network surface is the
+Tailscale boundary. IBKR and MooMoo/Futu login credentials never enter the app;
+Longbridge uses read-only API credentials supplied through your environment.
 
 ## Highlights
 
 ### 🔌 Every broker in one table
 
-Interactive Brokers and MooMoo/Futu positions land in a single ordered table.
+Interactive Brokers, MooMoo/Futu, and Longbridge positions land in a single
+ordered table.
 Filter by broker, account, or asset class with chips; click any numeric column to
 sort; type to search by name or ticker. Per-broker totals fall out of the chips —
 no spreadsheet reconciliation, no tab-switching between four brokerage apps.
@@ -74,10 +76,11 @@ already useful before a single byte of JavaScript runs.
 
 ### 🔒 Private by design
 
-Credentials live in IB Gateway and OpenD — **portfolio-hub never sees them**. The
-IBKR connection uses a Read-Only API key, so order placement is impossible at the
-protocol level. Tailscale Funnel is disabled; the dashboard binds to your tailnet
-interface only.
+IBKR credentials live in IB Gateway, and MooMoo/Futu credentials live in OpenD —
+**portfolio-hub never sees them**. Longbridge API credentials are read from your
+deployment environment and should be read-only. The IBKR connection uses a
+Read-Only API key, so order placement is impossible at the protocol level.
+Tailscale Funnel is disabled; the dashboard binds to your tailnet interface only.
 
 ## Brokers
 
@@ -85,8 +88,8 @@ interface only.
 |---|---|---|---|
 | **Interactive Brokers (IBKR)** | ✅ Production | TWS API via `ib-gateway-docker` (`gnzsnz/ib-gateway-docker`) on a Read-Only API key | IB account, IB Gateway credentials |
 | **MooMoo / Futu** | ✅ Production | OpenAPI socket via a local OpenD process | MooMoo/Futu account, OpenD installed and logged in |
+| **Longbridge** | ✅ Production | Longbridge OpenAPI via read-only API key env vars | Longbridge account, OpenAPI app key/secret/access token |
 | **Tiger Brokers** | 📋 Planned (Protocol-ready) | n/a | — |
-| **Longbridge** | 📋 Planned (Protocol-ready) | n/a | — |
 
 The `Broker` protocol is the only contract — adding a broker doesn't touch the UI,
 the market-hours engine, the FX service, or the snapshot job.
@@ -149,13 +152,34 @@ as `FUTUAU`, `FUTUCA`, `FUTUMY`, or `FUTUJP`. Full setup notes (download archive
 macOS Privacy & Security hints, `host.docker.internal` for Docker Desktop) live in
 [`scripts/setup_opend.py`](./scripts/setup_opend.py).
 
+### Add Longbridge
+
+Create a read-only Longbridge OpenAPI key, then add the API credentials to
+`.env`:
+
+```bash
+BROKERS_ENABLED=ibkr,futu,longbridge
+LONGBRIDGE_APP_KEY=<your app key>
+LONGBRIDGE_APP_SECRET=<your app secret>
+LONGBRIDGE_ACCESS_TOKEN=<your access token>
+LONGBRIDGE_ACCOUNT_ID=Longbridge
+LONGBRIDGE_POSITION_CHANNEL=          # optional; set if Longbridge returns multiple channels
+LONGBRIDGE_BASE_CURRENCY=USD
+LONGBRIDGE_POLL_INTERVAL_S=30
+```
+
+The adapter reads stock positions, cash balances, account equity, static
+security info, and quotes. It does not place orders or ingest execution history
+in v1. If Longbridge returns more than one stock position channel, set
+`LONGBRIDGE_POSITION_CHANNEL` to the single channel you want shown; v1 fails
+clearly instead of merging channels.
+
 ## Roadmap
 
 The `Broker` protocol and the SQLite seed jobs already exist; these are the next
 surfaces to build on them:
 
 - **Tiger Brokers** — Protocol-ready adapter, planned.
-- **Longbridge** — Protocol-ready adapter, planned.
 - **Equity curve / TWR / XIRR** — the backend already captures per-market-close
   net-liquidation snapshots into `equity_snapshots`; the UI is next.
 - **Trade journal & realized P&L** — fills are streamed and reconciled end-of-day
@@ -180,7 +204,7 @@ surfaces to build on them:
 - **Read-only at the gateway.** The IBKR Read-Only API key is set on the gateway itself, so accidental order placement is impossible at the protocol level — not just absent from the UI.
 - **No public exposure.** Tailscale Funnel disabled. The dashboard binds to the tailnet interface only.
 - **Dual-listed instruments stay separate.** `9988.HK` and `BABA.US` are different rows with different cost bases, by design.
-- **Credentials never enter this app.** IBKR creds live in IB Gateway; MooMoo creds live in OpenD. portfolio-hub holds neither.
+- **Broker credentials stay scoped.** IBKR creds live in IB Gateway; MooMoo creds live in OpenD. Longbridge API key, secret, and token live in the dashboard environment and should be read-only.
 
 ## License & trademarks
 
@@ -188,6 +212,6 @@ Apache 2.0 — see [LICENSE](./LICENSE) and [NOTICE](./NOTICE). Includes an expl
 patent grant; requires attribution and the license to be preserved in derivative
 works.
 
-> Interactive Brokers, IBKR, MooMoo, and Futu are trademarks of their respective
-> owners. This project is independent and is not affiliated with, endorsed by, or
-> sponsored by any of them.
+> Interactive Brokers, IBKR, MooMoo, Futu, and Longbridge are trademarks of
+> their respective owners. This project is independent and is not affiliated
+> with, endorsed by, or sponsored by any of them.
