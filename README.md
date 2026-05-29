@@ -35,8 +35,10 @@ no spreadsheet reconciliation, no tab-switching between four brokerage apps.
 
 | | |
 |---|---|
-| ![Dark theme](docs/screenshots/dashboard-dark.png) | ![Mobile](docs/screenshots/dashboard-mobile.png) |
-| *Dark theme — auto-follows your OS, override with the toggle.* | *Mobile — full feature parity; the market rail scrolls horizontally.* |
+| ![Filtered to one broker](docs/screenshots/dashboard-dark.png) | ![Mobile](docs/screenshots/dashboard-mobile.png) |
+| *Tap a chip to filter to one broker — totals, market rail, and holdings all follow.* | *Mobile — full feature parity; the market rail scrolls horizontally.* |
+
+Light and dark themes both ship and auto-follow your OS (override with the header toggle).
 
 ### 🌍 Exchange-aware market hours
 
