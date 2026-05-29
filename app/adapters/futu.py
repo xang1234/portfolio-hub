@@ -9,15 +9,27 @@ loop responsive.
 import asyncio
 import importlib
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
 from app.core.broker import AccountSummary, ConnectionState, Position
 from app.core.fx import FxConversion, FxService
 from app.core.live_positions import LivePositions
+from app.core.symbols import CURRENCY_NAMES
 
 
 _LOG = logging.getLogger(__name__)
+
+_DEFAULT_RECONNECT_DELAYS: Sequence[float] = (
+    5.0,
+    15.0,
+    60.0,
+    60.0,
+    60.0,
+    60.0,
+    60.0,
+    60.0,
+)
 
 
 _FUTU_EXCHANGE_TO_IB: dict[str, str] = {
@@ -61,6 +73,7 @@ class FutuAdapter:
         fx_service: FxService | None = None,
         live_positions: LivePositions | None = None,
         poll_interval_s: float = 30.0,
+        reconnect_delays: Sequence[float] | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -74,32 +87,49 @@ class FutuAdapter:
         self._fx_service = fx_service
         self._live_positions = live_positions
         self._poll_interval_s = poll_interval_s
+        self._reconnect_delays: Sequence[float] = tuple(
+            reconnect_delays if reconnect_delays is not None else _DEFAULT_RECONNECT_DELAYS
+        )
         self._contexts: list[Any] = []
+        self._context_markets: dict[int, str] = {}
         self._account_contexts: dict[str, list[Any]] = {}
         self._connection_state = ConnectionState.DISCONNECTED
         self._poll_task: asyncio.Task | None = None
+        self._reconnect_task: asyncio.Task | None = None
+        self._current_backoff_delay: float | None = None
 
     async def start(self) -> None:
         try:
             await self.connect()
-        except Exception as exc:
-            _LOG.warning("Futu OpenD connect failed; adapter disabled for now: %s", exc)
+        except ValueError as exc:
+            _LOG.error("Futu OpenD configuration invalid; adapter disabled: %s", exc)
             await self._close_contexts()
             self._connection_state = ConnectionState.DISCONNECTED
+            self._current_backoff_delay = None
+        except Exception as exc:
+            _LOG.warning("Futu OpenD connect failed; entering reconnect loop: %s", exc)
+            await self._close_contexts()
+            self._enter_reconnecting()
 
     async def connect(self) -> None:
+        if self._reconnect_task is not asyncio.current_task():
+            await self._stop_reconnecting()
         await self._stop_polling()
         await self._close_contexts()
         sdk = self._get_sdk()
+        self._validate_config(sdk)
         contexts: list[Any] = []
         try:
             for market in self._markets:
-                contexts.append(await asyncio.to_thread(self._build_context, sdk, market))
+                ctx = await asyncio.to_thread(self._build_context, sdk, market)
+                contexts.append(ctx)
+                self._context_markets[id(ctx)] = market
             self._contexts = contexts
             self._account_contexts = {}
             for ctx in contexts:
                 await self._load_accounts_from_context(sdk, ctx)
             self._connection_state = ConnectionState.CONNECTED
+            self._current_backoff_delay = None
             await self._refresh_live_positions()
             if self._live_positions is not None and self._poll_interval_s > 0:
                 self._poll_task = asyncio.create_task(self._poll_loop())
@@ -110,6 +140,7 @@ class FutuAdapter:
             raise
 
     async def disconnect(self) -> None:
+        await self._stop_reconnecting()
         await self._stop_polling()
         await self._close_contexts()
         self._connection_state = ConnectionState.DISCONNECTED
@@ -147,7 +178,9 @@ class FutuAdapter:
                 "Futu position_list_query failed for "
                 f"{len(query_failures)} account/market context(s)"
             )
-        return list(by_key.values())
+        positions = list(by_key.values())
+        positions.extend(await self._account_cash_positions(sdk))
+        return positions
 
     async def _position_rows_for_context(
         self,
@@ -156,10 +189,13 @@ class FutuAdapter:
         ctx: Any,
     ) -> list[dict[str, Any]] | None:
         kwargs = {
-            "trd_env": _enum_value(sdk, "TrdEnv", self._trd_env),
+            "trd_env": _enum_value(sdk, "TrdEnv", self._trd_env, strict=True),
             "acc_id": int(account_id),
             "refresh_cache": self._refresh_cache,
         }
+        market = self._context_markets.get(id(ctx))
+        if market:
+            kwargs["position_market"] = _enum_value(sdk, "TrdMarket", market, strict=True)
         ret, data = await asyncio.to_thread(ctx.position_list_query, **kwargs)
         if not _is_ret_ok(sdk, ret):
             _LOG.warning("Futu position_list_query failed for %s: %s", account_id, data)
@@ -174,22 +210,42 @@ class FutuAdapter:
         for account_id, contexts in self._account_contexts.items():
             if not contexts:
                 continue
-            ctx = contexts[0]
-            kwargs = {
-                "trd_env": _enum_value(sdk, "TrdEnv", self._trd_env),
-                "acc_id": int(account_id),
-            }
-            currency = _optional_enum_value(sdk, "Currency", "USD")
-            if currency is not None:
-                kwargs["currency"] = currency
-            ret, data = await asyncio.to_thread(ctx.accinfo_query, **kwargs)
-            if not _is_ret_ok(sdk, ret):
-                _LOG.warning("Futu accinfo_query failed for %s: %s", account_id, data)
+            row = await self._account_info_row_for_context(sdk, account_id, contexts[0])
+            if row is None:
                 continue
-            rows = _records(data)
-            if not rows:
+            out.append(self._summary_from_row(account_id, row))
+        return out
+
+    async def _account_info_row_for_context(
+        self, sdk: Any, account_id: str, ctx: Any,
+    ) -> dict[str, Any] | None:
+        kwargs = {
+            "trd_env": _enum_value(sdk, "TrdEnv", self._trd_env, strict=True),
+            "acc_id": int(account_id),
+        }
+        currency = _optional_enum_value(sdk, "Currency", "USD")
+        if currency is not None:
+            kwargs["currency"] = currency
+        ret, data = await asyncio.to_thread(ctx.accinfo_query, **kwargs)
+        if not _is_ret_ok(sdk, ret):
+            _LOG.warning("Futu accinfo_query failed for %s: %s", account_id, data)
+            return None
+        rows = _records(data)
+        if not rows:
+            return None
+        return rows[0]
+
+    async def _account_cash_positions(self, sdk: Any) -> list[Position]:
+        out: list[Position] = []
+        for account_id, contexts in self._account_contexts.items():
+            if not contexts:
                 continue
-            out.append(self._summary_from_row(account_id, rows[0]))
+            row = await self._account_info_row_for_context(sdk, account_id, contexts[0])
+            if row is None:
+                continue
+            position = self._cash_position_from_account_row(account_id, row)
+            if position is not None:
+                out.append(position)
         return out
 
     def _get_sdk(self) -> Any:
@@ -205,13 +261,21 @@ class FutuAdapter:
             "Futu/Moomoo SDK not installed; install moomoo-api or futu-api"
         )
 
+    def _validate_config(self, sdk: Any) -> None:
+        _enum_value(sdk, "TrdEnv", self._trd_env, strict=True)
+        _enum_value(sdk, "SecurityFirm", self._security_firm, strict=True)
+        for market in self._markets:
+            _enum_value(sdk, "TrdMarket", market, strict=True)
+
     def _build_context(self, sdk: Any, market: str) -> Any:
         factory = self._context_factory or sdk.OpenSecTradeContext
         kwargs = {
-            "filter_trdmarket": _enum_value(sdk, "TrdMarket", market),
+            "filter_trdmarket": _enum_value(sdk, "TrdMarket", market, strict=True),
             "host": self._host,
             "port": self._port,
-            "security_firm": _enum_value(sdk, "SecurityFirm", self._security_firm),
+            "security_firm": _enum_value(
+                sdk, "SecurityFirm", self._security_firm, strict=True
+            ),
         }
         if self._is_encrypt is not None:
             kwargs["is_encrypt"] = self._is_encrypt
@@ -220,9 +284,13 @@ class FutuAdapter:
     async def _load_accounts_from_context(self, sdk: Any, ctx: Any) -> None:
         ret, data = await asyncio.to_thread(ctx.get_acc_list)
         if not _is_ret_ok(sdk, ret):
-            raise RuntimeError(f"get_acc_list failed: {data}")
+            market = self._context_markets.get(id(ctx), "unknown")
+            raise RuntimeError(f"Futu get_acc_list failed for {market}: {data}")
+        market = self._context_markets.get(id(ctx))
         for row in _records(data):
             if not _account_is_usable(row, self._trd_env):
+                continue
+            if market and not _account_has_market_authority(row, market):
                 continue
             account_id = _clean_account_id(row.get("acc_id"))
             if account_id:
@@ -233,6 +301,7 @@ class FutuAdapter:
     async def _close_contexts(self) -> None:
         contexts = self._contexts
         self._contexts = []
+        self._context_markets = {}
         self._account_contexts = {}
         for ctx in contexts:
             close = getattr(ctx, "close", None)
@@ -252,6 +321,63 @@ class FutuAdapter:
             except (asyncio.CancelledError, Exception):
                 pass
 
+    async def _stop_reconnecting(self) -> None:
+        task = self._reconnect_task
+        self._reconnect_task = None
+        self._current_backoff_delay = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    def current_backoff_delay(self) -> float | None:
+        return self._current_backoff_delay
+
+    def _enter_reconnecting(self) -> None:
+        if self._connection_state is ConnectionState.RECONNECTING:
+            return
+        self._connection_state = ConnectionState.RECONNECTING
+        if not self._reconnect_delays:
+            self._connection_state = ConnectionState.DISCONNECTED
+            return
+        if self._reconnect_task is None or self._reconnect_task.done():
+            self._reconnect_task = asyncio.create_task(self._reconnect_loop())
+
+    async def _reconnect_loop(self) -> None:
+        try:
+            for attempt, delay in enumerate(self._reconnect_delays, start=1):
+                self._current_backoff_delay = delay
+                await asyncio.sleep(delay)
+                if self._connection_state is ConnectionState.CONNECTED:
+                    return
+                try:
+                    await self.connect()
+                    _LOG.info("Futu reconnect attempt %d succeeded", attempt)
+                    self._current_backoff_delay = None
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except ValueError as exc:
+                    _LOG.error("Futu OpenD configuration invalid; stopping reconnect: %s", exc)
+                    self._connection_state = ConnectionState.DISCONNECTED
+                    self._current_backoff_delay = None
+                    return
+                except Exception as exc:
+                    _LOG.warning("Futu reconnect attempt %d failed: %s", attempt, exc)
+                    self._connection_state = ConnectionState.RECONNECTING
+                    continue
+            _LOG.error(
+                "Futu reconnect exhausted after %d attempts; staying DISCONNECTED",
+                len(self._reconnect_delays),
+            )
+            self._connection_state = ConnectionState.DISCONNECTED
+            self._current_backoff_delay = None
+        except asyncio.CancelledError:
+            self._current_backoff_delay = None
+            raise
+
     async def _refresh_live_positions(self) -> None:
         if self._live_positions is None:
             return
@@ -260,7 +386,7 @@ class FutuAdapter:
         try:
             positions = await self.get_positions()
         except Exception:
-            self._connection_state = ConnectionState.DISCONNECTED
+            self._enter_reconnecting()
             raise
         self._live_positions.replace_broker(self.name, positions)
 
@@ -273,7 +399,7 @@ class FutuAdapter:
                 raise
             except Exception as exc:
                 _LOG.warning("Futu position refresh failed: %s", exc)
-                if self._connection_state is ConnectionState.DISCONNECTED:
+                if self._connection_state is not ConnectionState.CONNECTED:
                     return
 
     def _position_from_row(self, account_id: str, row: dict[str, Any]) -> Position | None:
@@ -344,6 +470,36 @@ class FutuAdapter:
             gross_position_value_usd=self._to_usd(market_value_native, currency),
         )
 
+    def _cash_position_from_account_row(
+        self, account_id: str, row: dict[str, Any],
+    ) -> Position | None:
+        currency = str(row.get("currency") or "USD").upper()
+        quantity = _first_float(row, "cash", "us_cash")
+        if quantity == 0.0:
+            return None
+        conv = self._convert_to_usd(currency, quantity, 0.0)
+        return Position(
+            broker=self.name,
+            account_id=account_id,
+            native_key=currency,
+            canonical_symbol=currency,
+            native_symbol=currency,
+            exchange="",
+            currency=currency,
+            name_en=CURRENCY_NAMES.get(currency, currency),
+            asset_class="CASH",
+            quantity=quantity,
+            avg_cost=1.0,
+            last_price=1.0,
+            market_value_native=quantity,
+            market_value_usd=conv.mv_usd,
+            unrealized_pnl_native=0.0,
+            unrealized_pnl_usd=0.0,
+            fx_is_stale=conv.fx_is_stale,
+            fx_is_fallback=conv.fx_is_fallback,
+            fx_unavailable=conv.fx_unavailable,
+        )
+
     def _convert_to_usd(
         self, currency: str, mv_native: float, pnl_native: float,
     ) -> FxConversion:
@@ -381,11 +537,16 @@ def _records(data: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _enum_value(sdk: Any, container: str, name: str) -> Any:
+def _enum_value(sdk: Any, container: str, name: str, *, strict: bool = False) -> Any:
     enum = getattr(sdk, container, None)
     if enum is None:
         return name
-    return getattr(enum, name, name)
+    value = getattr(enum, name, None)
+    if value is not None:
+        return value
+    if strict:
+        raise ValueError(f"unknown Futu {container} {name!r}")
+    return name
 
 
 def _optional_enum_value(sdk: Any, container: str, name: str) -> Any | None:
@@ -405,6 +566,23 @@ def _account_is_usable(row: dict[str, Any], trd_env: str) -> bool:
         return False
     status = _normalise_enum_text(row.get("acc_status"))
     return status in ("", "ACTIVE")
+
+
+def _account_has_market_authority(row: dict[str, Any], market: str) -> bool:
+    raw = row.get("trdmarket_auth")
+    if raw in (None, "", "N/A"):
+        return True
+    if isinstance(raw, str):
+        values = [token.strip() for token in raw.strip("[]").split(",")]
+    else:
+        try:
+            values = list(raw)
+        except TypeError:
+            values = [raw]
+    authorised = {_normalise_enum_text(value) for value in values if value not in (None, "")}
+    if not authorised:
+        return True
+    return market in authorised
 
 
 def _normalise_enum_text(value: Any) -> str:

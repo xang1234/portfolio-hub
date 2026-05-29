@@ -87,43 +87,43 @@ def _cash(broker: str, account: str, ccy: str, amount: float, fx_to_usd: float) 
 
 IBKR_POSITIONS: list[Position] = [
     # US tech — large position, modest intraday gain
-    _stk("IBKR", "U7654321", "NVDA", "NVIDIA Corp", "NASDAQ", "USD",
+    _stk("IBKR", "DEMO-IBKR", "NVDA", "NVIDIA Corp", "NASDAQ", "USD",
          qty=180, avg=420.00, last=512.40, prev=508.20),
-    _stk("IBKR", "U7654321", "AAPL", "Apple Inc", "NASDAQ", "USD",
+    _stk("IBKR", "DEMO-IBKR", "AAPL", "Apple Inc", "NASDAQ", "USD",
          qty=250, avg=152.30, last=189.75, prev=191.20),
-    _stk("IBKR", "U7654321", "MSFT", "Microsoft Corp", "NASDAQ", "USD",
+    _stk("IBKR", "DEMO-IBKR", "MSFT", "Microsoft Corp", "NASDAQ", "USD",
          qty=120, avg=295.60, last=412.85, prev=410.10),
     # Japan — Toyota on TSE, JPY → USD
-    _stk("IBKR", "U7654321", "7203", "Toyota Motor Corp", "TSEJ", "JPY",
+    _stk("IBKR", "DEMO-IBKR", "7203", "Toyota Motor Corp", "TSEJ", "JPY",
          qty=400, avg=2100.0, last=2685.0, prev=2702.0, fx_to_usd=0.0064,
          canonical="7203.JP"),
     # UK — pence-quoted (price_magnifier visible on real IBKR)
-    _stk("IBKR", "U7654321", "BP", "BP plc", "LSE", "GBP",
+    _stk("IBKR", "DEMO-IBKR", "BP", "BP plc", "LSE", "GBP",
          qty=600, avg=4.80, last=5.42, prev=5.37, fx_to_usd=1.27,
          canonical="BP.UK"),
     # Cash
-    _cash("IBKR", "U7654321", "USD", 12_450.00, fx_to_usd=1.0),
-    _cash("IBKR", "U7654321", "JPY", 285_000.0, fx_to_usd=0.0064),
+    _cash("IBKR", "DEMO-IBKR", "USD", 12_450.00, fx_to_usd=1.0),
+    _cash("IBKR", "DEMO-IBKR", "JPY", 285_000.0, fx_to_usd=0.0064),
 ]
 
 FUTU_POSITIONS: list[Position] = [
     # HK — Tencent (Stock Connect / native HK)
-    _stk("Futu", "5621008", "700", "Tencent Holdings Ltd", "SEHK", "HKD",
+    _stk("Futu", "DEMO-FUTU", "700", "Tencent Holdings Ltd", "SEHK", "HKD",
          qty=400, avg=305.50, last=398.40, prev=395.80, fx_to_usd=0.1282,
          canonical="700.HK"),
     # HK — HSBC
-    _stk("Futu", "5621008", "5", "HSBC Holdings plc", "SEHK", "HKD",
+    _stk("Futu", "DEMO-FUTU", "5", "HSBC Holdings plc", "SEHK", "HKD",
          qty=800, avg=58.20, last=72.15, prev=71.90, fx_to_usd=0.1282,
          canonical="5.HK"),
     # US dual-listed for the same Futu account
-    _stk("Futu", "5621008", "TSLA", "Tesla Inc", "NASDAQ", "USD",
+    _stk("Futu", "DEMO-FUTU", "TSLA", "Tesla Inc", "NASDAQ", "USD",
          qty=85, avg=210.40, last=242.80, prev=248.10),
     # Taiwan — TSMC on TWSE (kept strictly distinct from mainland CN)
-    _stk("Futu", "5621008", "2330", "Taiwan Semiconductor Mfg", "TWSE", "TWD",
+    _stk("Futu", "DEMO-FUTU", "2330", "Taiwan Semiconductor Mfg", "TWSE", "TWD",
          qty=300, avg=580.0, last=712.0, prev=706.0, fx_to_usd=0.0312,
          canonical="2330.TW"),
     # Cash
-    _cash("Futu", "5621008", "HKD", 28_400.00, fx_to_usd=0.1282),
+    _cash("Futu", "DEMO-FUTU", "HKD", 28_400.00, fx_to_usd=0.1282),
 ]
 
 
@@ -142,6 +142,7 @@ def main() -> None:
 
     import uvicorn
     from app.main import create_app
+    from app.core.markets import MarketHours
 
     # Pre-seed LivePositions so the SSE `snapshot` event doesn't blank out
     # the server-rendered tbody on page connect. In production this seeding
@@ -150,7 +151,31 @@ def main() -> None:
     live = LivePositions()
     live.replace_all(IBKR_POSITIONS + FUTU_POSITIONS)
 
-    app = create_app(broker=build_broker(), live_positions=live)
+    # By default the mock uses the real clock, so the live market rail and the
+    # "Updated …" / countdown timers (computed client-side against the browser's
+    # clock) all stay correct while you browse.
+    #
+    # Set MOCK_CLOCK=demo to instead freeze the *server* clock to a curated
+    # moment that exercises every market-status and closure state at once —
+    # handy for regenerating the README screenshots. MarketHours accepts an
+    # injectable clock; create_app forwards it to every market calculation.
+    #
+    # Demo moment: Wed 25 Nov 2026, 04:30 UTC.
+    #   · HKEX 12:30 HKT → LUNCH 🟡     · TSE 13:30 JST → OPEN 🟢 (afternoon)
+    #   · TWSE 12:30     → OPEN 🟢      · NYSE/LSE      → CLOSED 🔴
+    #   · Closures this week (Mon 23–Fri 27): Thanksgiving Thu 26 (full HOLIDAY)
+    #     + Black Friday 27 early close 13:00 ET (EARLY_CLOSE) — both kinds, and
+    #     both still ahead of "today" so neither is dimmed as past.
+    # (In demo mode the page's client-side countdowns will read against the real
+    # browser clock; freeze it browser-side too when capturing screenshots.)
+    market_hours = None
+    if os.environ.get("MOCK_CLOCK", "").lower() in ("demo", "1", "true", "yes", "on"):
+        from datetime import datetime, timezone
+        frozen = datetime(2026, 11, 25, 4, 30, tzinfo=timezone.utc)
+        market_hours = MarketHours(clock=lambda: frozen)
+        print(f"  (MOCK_CLOCK=demo → server clock frozen at {frozen.isoformat()})", flush=True)
+
+    app = create_app(broker=build_broker(), live_positions=live, market_hours=market_hours)
     port = int(os.environ.get("PORT", "8765"))
     print(f"\n  mock dashboard → http://127.0.0.1:{port}\n", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

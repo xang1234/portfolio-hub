@@ -535,6 +535,13 @@ def _extract_forex_price(ticker) -> float | None:
 
 def _contract_quotes_usd_base(currency: str, contract: Any) -> bool:
     pair = getattr(contract, "pair", "")
+    if callable(pair):
+        try:
+            pair = pair()
+        except Exception:
+            pair = ""
+    if not isinstance(pair, str):
+        pair = ""
     if not pair:
         symbol = getattr(contract, "symbol", "")
         quote_currency = getattr(contract, "currency", "")

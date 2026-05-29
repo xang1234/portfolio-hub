@@ -234,6 +234,15 @@ class MarketHours:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._calendars: dict[str, object] = {}
 
+    def now(self) -> datetime:
+        """Current UTC time as seen by this MarketHours' clock.
+
+        Callers that need "today" for week/closure math should use this
+        rather than ``datetime.now()`` directly, so the live market rail and
+        the closures strip always agree on which day it is — including under
+        an injected clock (tests, the mock dashboard)."""
+        return self._clock()
+
     def _calendar(self, mic: str):
         cal = self._calendars.get(mic)
         if cal is None:
