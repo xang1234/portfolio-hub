@@ -69,6 +69,16 @@ class CompositeBroker:
             return ConnectionState.RECONNECTING
         return ConnectionState.DISCONNECTED
 
+    def current_backoff_delay(self) -> float | None:
+        for adapter in self._adapters:
+            delay_getter = getattr(adapter, "current_backoff_delay", None)
+            if not callable(delay_getter):
+                continue
+            delay = delay_getter()
+            if delay is not None:
+                return delay
+        return None
+
     async def get_positions(self) -> list[Position]:
         results = await asyncio.gather(
             *(adapter.get_positions() for adapter in self._adapters),

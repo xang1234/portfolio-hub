@@ -33,12 +33,14 @@ class _Adapter:
         positions=None,
         summaries=None,
         start_state=None,
+        backoff_delay=None,
     ):
         self.name = name
         self._state = state
         self._positions = positions or []
         self._summaries = summaries or []
         self._start_state = start_state
+        self._backoff_delay = backoff_delay
         self.started = False
         self.disconnected = False
 
@@ -64,6 +66,9 @@ class _Adapter:
 
     async def get_account_summary(self):
         return list(self._summaries)
+
+    def current_backoff_delay(self):
+        return self._backoff_delay
 
 
 @pytest.mark.asyncio
@@ -118,6 +123,17 @@ async def test_composite_broker_reports_reconnecting_when_one_enabled_broker_is_
         "IBKR": ConnectionState.CONNECTED,
         "Futu": ConnectionState.DISCONNECTED,
     }
+
+
+def test_composite_broker_forwards_reconnecting_child_backoff_delay():
+    from app.core.composite_broker import CompositeBroker
+
+    broker = CompositeBroker([
+        _Adapter("IBKR", state=ConnectionState.CONNECTED),
+        _Adapter("Futu", state=ConnectionState.RECONNECTING, backoff_delay=15.0),
+    ])
+
+    assert broker.current_backoff_delay() == 15.0
 
 
 @pytest.mark.asyncio

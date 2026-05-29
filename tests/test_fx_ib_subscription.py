@@ -44,6 +44,17 @@ class FakeForexContract:
 
 
 @dataclass
+class CallablePairForexContract:
+    pair_value: str
+    conId: int | None = None
+    symbol: str = ""
+    currency: str = ""
+
+    def pair(self):
+        return self.pair_value
+
+
+@dataclass
 class FakeTicker:
     contract: FakeForexContract
     last: float | None = None
@@ -68,7 +79,7 @@ class FakeIB:
 
     def reqMktData(self, contract, *args, **kwargs):
         ticker = FakeTicker(contract=contract)
-        self._tickers_by_pair[contract.pair] = ticker
+        self._tickers_by_pair[_pair_key(contract)] = ticker
         self.req_mkt_data_calls.append(contract)
         return ticker
 
@@ -107,6 +118,19 @@ def _forex(currency: str) -> FakeForexContract:
 
 def _usd_base_forex(currency: str) -> FakeForexContract:
     return FakeForexContract(pair=f"USD{currency}")
+
+
+def _callable_usd_base_forex(currency: str) -> CallablePairForexContract:
+    return CallablePairForexContract(
+        pair_value=f"USD{currency}",
+        symbol="USD",
+        currency=currency,
+    )
+
+
+def _pair_key(contract) -> str:
+    pair = getattr(contract, "pair")
+    return pair() if callable(pair) else pair
 
 
 @pytest.fixture
@@ -252,6 +276,26 @@ async def test_ticker_update_propagates_to_get_rate(store):
 async def test_usd_base_ticker_update_is_inverted_to_usd_per_native(store):
     fake_ib = FakeIB()
     svc = FxService(store=store, ib=fake_ib, forex_factory=_usd_base_forex)
+    await svc.start()
+    await svc.ensure_subscribed({"JPY"})
+
+    ticker = fake_ib.ticker_for("USDJPY")
+    ticker.bid = 150.0
+    ticker.ask = 151.0
+    ticker.updateEvent.emit(ticker)
+    import asyncio
+    await asyncio.sleep(0.02)
+
+    rate = await svc.get_rate("JPY")
+    assert rate is not None
+    assert rate.pair == "JPYUSD"
+    assert rate.rate == pytest.approx(1 / 150.5)
+    assert rate.source == "IB"
+
+
+async def test_callable_pair_method_usd_base_ticker_update_is_inverted(store):
+    fake_ib = FakeIB()
+    svc = FxService(store=store, ib=fake_ib, forex_factory=_callable_usd_base_forex)
     await svc.start()
     await svc.ensure_subscribed({"JPY"})
 

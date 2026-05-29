@@ -9,6 +9,7 @@ services:
       TRADING_MODE: ${TRADING_MODE:-live}
       TWOFA_DEVICE: ${TWOFA_DEVICE:-mobile}
       RELOGIN_AFTER_TWOFA_TIMEOUT: ${RELOGIN_AFTER_TWOFA_TIMEOUT:-yes}
+      READ_ONLY_LOGIN: ${READ_ONLY_LOGIN:-yes}
       READ_ONLY_API: ${READ_ONLY_API:-yes}
       # TRUSTED_IPS is NOT an env var the gnzsnz image processes. We control
       # TrustedIPs by bind-mounting our own jts.ini.tmpl below.
@@ -16,6 +17,7 @@ services:
     volumes:
       - ib-gateway-config:/home/ibgateway/Jts
       - ./gateway/jts.ini.tmpl:/home/ibgateway/Jts/jts.ini.tmpl:ro
+      - ./gateway/ibc/config.ini.tmpl:/home/ibgateway/ibc/config.ini.tmpl:ro
     # Ports are NOT published to the host. The gnzsnz image keeps Gateway's
     # native 4001/4002 ports on loopback and exposes socat forwarders on
     # 4003/4004 for other containers on the Docker network.

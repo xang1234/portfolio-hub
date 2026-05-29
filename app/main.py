@@ -857,7 +857,7 @@ def create_app(
         )
         closures_this_week = _closures_this_week(
             market_by_ib, flag_by_ib, market_hours,
-            now=datetime.now(timezone.utc),
+            now=market_hours.now(),
         )
         return templates.TemplateResponse(
             request=request,
