@@ -10,6 +10,15 @@ __pycache__/
 .env
 .env.local
 data/
+# Mirror the secret-bearing entries in .gitignore so broker credentials and
+# local DBs never enter the Docker build context (a broad COPY or build-cache
+# capture would otherwise bake them into an image layer).
+.opend/
+jts/
+Jts/
+*.db
+*.db-shm
+*.db-wal
 tests/
 PLAN.md
 .DS_Store
