@@ -75,9 +75,13 @@ def _client(adapter, store):
 # Happy path -----------------------------------------------------------------
 
 
-def test_post_reconcile_returns_inserted_count(tmp_path):
+def test_post_reconcile_returns_inserted_count(tmp_path, monkeypatch):
     import asyncio
     from app.db.store import Store
+
+    # Admin auth is fail-closed; opt out explicitly for this functional test.
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
 
     async def _setup():
         s = Store(tmp_path / "test.db")
@@ -122,8 +126,12 @@ def test_get_admin_reconcile_returns_405(tmp_path):
 # No store wired returns a clear error --------------------------------------
 
 
-def test_post_reconcile_without_store_returns_503(tmp_path):
+def test_post_reconcile_without_store_returns_503(tmp_path, monkeypatch):
     from app.main import create_app
+    # Opt out of admin auth so we reach (and assert on) the store-missing 503,
+    # not the auth-not-configured 503.
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
     adapter = FakeAdapter([])
     app = create_app(broker=adapter)
     # Deliberately don't attach app.state.store
@@ -190,11 +198,10 @@ def test_admin_endpoint_accepts_correct_token(tmp_path, monkeypatch):
     asyncio.run(store.close())
 
 
-def test_admin_endpoint_open_when_no_token_env_var(tmp_path, monkeypatch):
-    """When ADMIN_TOKEN is unset (default for dev / tests), no auth is
-    enforced — preserves backward compatibility for non-production setups.
-    Operators opting into auth set the env var; Tailscale is the network
-    boundary otherwise."""
+def test_admin_endpoint_fail_closed_when_no_token_configured(tmp_path, monkeypatch):
+    """Fail-closed: with neither ADMIN_TOKEN nor the ADMIN_ALLOW_NO_AUTH
+    escape hatch set, admin routes are refused with 503 rather than running
+    unauthenticated. A forgotten env var is a loud, safe failure."""
     import asyncio
     from app.db.store import Store
 
@@ -203,6 +210,26 @@ def test_admin_endpoint_open_when_no_token_env_var(tmp_path, monkeypatch):
     store = asyncio.run(_setup())
 
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("ADMIN_ALLOW_NO_AUTH", raising=False)
+    adapter = FakeAdapter([])
+    response = _client(adapter, store).post("/admin/reconcile-fills")
+    assert response.status_code == 503
+    assert "auth" in response.json().get("detail", "").lower()
+    asyncio.run(store.close())
+
+
+def test_admin_endpoint_open_with_explicit_opt_out(tmp_path, monkeypatch):
+    """ADMIN_ALLOW_NO_AUTH=1 is the explicit opt-out for trusted local/dev
+    use, restoring open access without a token."""
+    import asyncio
+    from app.db.store import Store
+
+    async def _setup():
+        s = Store(tmp_path / "test.db"); await s.init_schema(); return s
+    store = asyncio.run(_setup())
+
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
     adapter = FakeAdapter([])
     response = _client(adapter, store).post("/admin/reconcile-fills")
     assert response.status_code == 200

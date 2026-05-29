@@ -43,9 +43,12 @@ def _client(adapter, store):
 # Happy path -----------------------------------------------------------------
 
 
-def test_post_snapshot_returns_inserted_count(tmp_path):
+def test_post_snapshot_returns_inserted_count(tmp_path, monkeypatch):
     import asyncio
     from app.db.store import Store
+
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
 
     async def _setup():
         s = Store(tmp_path / "test.db"); await s.init_schema(); return s
@@ -66,10 +69,13 @@ def test_post_snapshot_returns_inserted_count(tmp_path):
     asyncio.run(store.close())
 
 
-def test_custom_session_tag(tmp_path):
+def test_custom_session_tag(tmp_path, monkeypatch):
     """?session=foo overrides the default 'MANUAL' tag."""
     import asyncio
     from app.db.store import Store
+
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
 
     async def _setup():
         s = Store(tmp_path / "test.db"); await s.init_schema(); return s
@@ -102,8 +108,10 @@ def test_get_admin_snapshot_returns_405(tmp_path):
     asyncio.run(store.close())
 
 
-def test_post_snapshot_without_store_returns_503(tmp_path):
+def test_post_snapshot_without_store_returns_503(tmp_path, monkeypatch):
     from app.main import create_app
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
     app = create_app(broker=_FakeAdapter([]))
     client = TestClient(app)
     response = client.post("/admin/snapshot")

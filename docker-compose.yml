@@ -45,11 +45,13 @@ services:
       TZ: ${TZ:-Asia/Singapore}
     volumes:
       - ./data:/app/data
-    # Bind to the loopback interface only. On a Tailscale-equipped host, the
-    # Tailnet interface picks this up via Tailscale Serve / hostname resolution
-    # without exposing 8080 on a public network.
+    # Bind to the loopback interface only. A bare "8080:8080" publishes on
+    # 0.0.0.0 (every host interface) — which would expose full portfolio data
+    # with no authentication on any reachable network. The explicit 127.0.0.1
+    # prefix keeps it loopback-only; on a Tailscale-equipped host, expose it to
+    # the Tailnet via `tailscale serve` rather than a public port publish.
     ports:
-      - "${DASHBOARD_PORT:-8080}:8080"
+      - "127.0.0.1:${DASHBOARD_PORT:-8080}:8080"
     depends_on:
       ib-gateway:
         condition: service_started

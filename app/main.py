@@ -174,6 +174,31 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+# Content-Security-Policy for every response. The page renders full portfolio
+# data, so the priority is: no third-party script origins, and no exfiltration
+# channel to attacker domains.
+#   - script-src 'self' keeps JS to our own (vendored) /static assets.
+#   - 'unsafe-eval' is required by the standard Alpine.js build (it compiles
+#     x-* expressions via the Function constructor). To drop it, switch to the
+#     @alpinejs/csp build and its restricted expression syntax.
+#   - connect-src 'self' is the anti-exfiltration control: SSE + fetch can only
+#     talk back to this origin, not to an attacker host injected via XSS.
+#   - style-src 'unsafe-inline' covers Alpine's x-show toggles and the few
+#     inline style attributes; Google Fonts is the only remote origin allowed.
+_CONTENT_SECURITY_POLICY = "; ".join((
+    "default-src 'self'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "img-src 'self' data:",
+    "script-src 'self' 'unsafe-eval'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "connect-src 'self'",
+))
+
+
 def _is_htmx_request(request: Request) -> bool:
     return request.headers.get("HX-Request", "").lower() == "true"
 
@@ -228,21 +253,31 @@ def _log_loop_crash(name: str) -> Callable[[asyncio.Task], None]:
 
 
 def _require_admin_token(request: Request) -> None:
-    """Enforce shared-secret auth on /admin/* routes when ADMIN_TOKEN is set.
+    """Enforce shared-secret auth on /admin/* routes.
 
-    Raises HTTPException 401 on mismatch. When the env var is unset (default
-    for dev / tests / Tailscale-only deployments), this is a no-op — the
-    operator opts into auth by setting the variable. Read at request time
-    rather than app start so the token can be rotated without restart.
+    Fail-closed: when ADMIN_TOKEN is unset the admin routes are refused with
+    503 rather than silently running unauthenticated. A forgotten env var
+    should be a loud, safe failure — not a removed control. Trusted local /
+    dev / test setups opt back out explicitly with ADMIN_ALLOW_NO_AUTH=1.
 
-    secrets.compare_digest is used instead of `==` to avoid leaking the
-    token length / prefix through timing side-channels.
+    When ADMIN_TOKEN is set, callers must supply a matching X-Admin-Token
+    header (401 on mismatch). Read at request time rather than app start so
+    the token can be rotated without restart. secrets.compare_digest avoids
+    leaking the token length / prefix through timing side-channels.
     """
     import secrets
 
     expected = os.environ.get("ADMIN_TOKEN", "")
     if not expected:
-        return
+        if _env_bool("ADMIN_ALLOW_NO_AUTH", False):
+            return
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "admin auth not configured: set ADMIN_TOKEN, or "
+                "ADMIN_ALLOW_NO_AUTH=1 for trusted local/dev use"
+            ),
+        )
     provided = request.headers.get("X-Admin-Token", "")
     if not secrets.compare_digest(provided, expected):
         raise HTTPException(status_code=401, detail="invalid admin token")
@@ -590,6 +625,31 @@ def create_app(
     app = FastAPI(lifespan=lifespan, title="portfolio-hub")
     app.state.broker = broker
     app.state.live_positions = live_positions
+
+    # Host-header allow-list (DNS-rebinding defense). Opt-in via ALLOWED_HOSTS
+    # (comma-separated). Off by default so TestClient (host "testserver") and
+    # bare local dev keep working; production sets the Tailscale hostname here.
+    # A loopback bind alone does NOT stop a malicious page from rebinding a
+    # name to 127.0.0.1 and reading this origin same-origin — Host validation
+    # does. CORS does not help post-rebind (requests appear same-origin).
+    allowed_hosts = _env_list("ALLOWED_HOSTS", "")
+    if allowed_hosts:
+        from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+        app.add_middleware(
+            TrustedHostMiddleware, allowed_hosts=list(allowed_hosts),
+        )
+
+    @app.middleware("http")
+    async def _security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault(
+            "Content-Security-Policy", _CONTENT_SECURITY_POLICY,
+        )
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        return response
+
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
     # Expose symbols helpers so templates can compute display data from
