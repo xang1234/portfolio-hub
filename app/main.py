@@ -433,6 +433,16 @@ def _build_production_broker(
                 ),
             )
         )
+    if "Tiger" in enabled:
+        from app.adapters.tiger import TigerAdapter
+
+        adapters.append(
+            TigerAdapter.from_env(
+                env=os.environ,
+                fx_service=fx_service,
+                live_positions=live_positions,
+            )
+        )
     if not adapters:
         raise RuntimeError("No enabled broker adapters configured")
     if len(adapters) == 1:

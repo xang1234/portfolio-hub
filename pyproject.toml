@@ -21,6 +21,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "moomoo-api>=10.6.6608",
     "longbridge>=4.2.1",
+    "tigeropen>=3.5.8",
 ]
 
 [project.optional-dependencies]

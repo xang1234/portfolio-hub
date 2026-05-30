@@ -137,3 +137,11 @@ def test_longbridge_chip_is_clickable_when_enabled(monkeypatch):
     response = _client([_pos()]).get("/")
 
     assert "?broker=Longbridge" in response.text
+
+
+def test_tiger_chip_is_clickable_when_enabled(monkeypatch):
+    monkeypatch.setenv("BROKERS_ENABLED", "ibkr,tiger")
+
+    response = _client([_pos()]).get("/")
+
+    assert "?broker=Tiger" in response.text
