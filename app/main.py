@@ -237,6 +237,7 @@ def _status_label(statuses: dict[str, str]) -> str:
         return {
             "ibkr": "IBKR",
             "futu": "Futu",
+            "tiger": "Tiger",
             "longbridge": "Longbridge",
         }.get(name, name.upper())
     return "Brokers"

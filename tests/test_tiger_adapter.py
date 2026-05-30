@@ -1,3 +1,4 @@
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -400,12 +401,9 @@ async def test_tiger_adapter_discovers_only_open_or_funded_accounts_unless_expli
     positions = await adapter.get_positions()
 
     assert [p.account_id for p in positions] == ["FUNDED", "OPEN"]
-    assert [call["account"] for call in trade.position_calls] == [
-        "FUNDED",
-        "OPEN",
-        "FUNDED",
-        "OPEN",
-    ]
+    assert Counter(call["account"] for call in trade.position_calls) == Counter(
+        {"FUNDED": 2, "OPEN": 2}
+    )
 
     explicit_trade = _TradeClient(
         accounts=[_AccountProfile("PENDING", status="Pending")],

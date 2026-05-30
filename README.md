@@ -89,7 +89,7 @@ Tailscale Funnel is disabled; the dashboard binds to your tailnet interface only
 | **Interactive Brokers (IBKR)** | ✅ Production | TWS API via `ib-gateway-docker` (`gnzsnz/ib-gateway-docker`) on a Read-Only API key | IB account, IB Gateway credentials |
 | **MooMoo / Futu** | ✅ Production | OpenAPI socket via a local OpenD process | MooMoo/Futu account, OpenD installed and logged in |
 | **Longbridge** | ✅ Production | Longbridge OpenAPI via read-only API key env vars | Longbridge account, OpenAPI app key/secret/access token |
-| **Tiger Brokers** | ✅ Production | Tiger OpenAPI via config directory or API credential env vars | Tiger account, developer ID, private key, account ID |
+| **Tiger Brokers** | ✅ Production | Tiger OpenAPI via config directory or API credential env vars | Tiger account, developer ID, account ID, and private key via `TIGER_PRIVATE_KEY` or `TIGER_PRIVATE_KEY_PATH` |
 
 The `Broker` protocol is the only contract — adding a broker doesn't touch the UI,
 the market-hours engine, the FX service, or the snapshot job.
@@ -184,12 +184,18 @@ BROKERS_ENABLED=ibkr,futu,longbridge,tiger
 TIGER_CONFIG_DIR=~/.tigeropen/          # or leave blank and set direct env vars
 TIGER_ID=<your developer id>
 TIGER_ACCOUNT=<your account id>
-TIGER_PRIVATE_KEY=                     # optional private key content
-TIGER_PRIVATE_KEY_PATH=                # optional private key path
+TIGER_PRIVATE_KEY=                     # private key content
+TIGER_PRIVATE_KEY_PATH=                # or private key path
 TIGER_BASE_CURRENCY=USD
 TIGER_MARKETS=US,HK,SG,AU,CN
 TIGER_POLL_INTERVAL_S=30
 ```
+
+Set `TIGER_PRIVATE_KEY` or `TIGER_PRIVATE_KEY_PATH` unless your Tiger config
+directory already supplies the key. If both are set, `TIGER_PRIVATE_KEY` takes
+precedence. In Docker Compose, `TIGER_CONFIG_DIR_HOST_PATH` is mounted read-only
+at `/run/tigeropen`, so set `TIGER_PRIVATE_KEY_PATH=/run/tigeropen/<key-file>`
+when using a key file.
 
 The adapter reads managed accounts, stock positions, cash buckets, account
 assets, and stock quote briefs. It does not place orders or ingest execution
@@ -216,7 +222,7 @@ surfaces to build on them:
 | Market hours | `exchange_calendars` (XHKG, XTKS, XKRX, XTAI, XSHG, XSES, XASX, XLON, XETR, XPAR, XAMS, XSWX, XNYS, XTSE…) |
 | Charts | TradingView Lightweight Charts (equity sparkline) |
 | Auth | None — Tailnet is the boundary |
-| Tests | 750+ pytests; fake broker fixtures, no IBKR mocks |
+| Tests | 790+ pytests; fake broker fixtures, no IBKR mocks |
 
 ## Design rules (hard)
 

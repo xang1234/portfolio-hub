@@ -49,7 +49,7 @@ services:
       LONGBRIDGE_POSITION_CHANNEL: ${LONGBRIDGE_POSITION_CHANNEL:-}
       LONGBRIDGE_BASE_CURRENCY: ${LONGBRIDGE_BASE_CURRENCY:-USD}
       LONGBRIDGE_POLL_INTERVAL_S: ${LONGBRIDGE_POLL_INTERVAL_S:-30}
-      TIGER_CONFIG_DIR: ${TIGER_CONFIG_DIR:-}
+      TIGER_CONFIG_DIR: /run/tigeropen
       TIGER_ID: ${TIGER_ID:-}
       TIGER_ACCOUNT: ${TIGER_ACCOUNT:-}
       TIGER_PRIVATE_KEY: ${TIGER_PRIVATE_KEY:-}
@@ -60,6 +60,7 @@ services:
       TZ: ${TZ:-Asia/Singapore}
     volumes:
       - ./data:/app/data
+      - ${TIGER_CONFIG_DIR_HOST_PATH:-./.tigeropen}:/run/tigeropen:ro
     # Bind to the loopback interface only. A bare "8080:8080" publishes on
     # 0.0.0.0 (every host interface) — which would expose full portfolio data
     # with no authentication on any reachable network. The explicit 127.0.0.1
