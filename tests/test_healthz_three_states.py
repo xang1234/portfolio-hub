@@ -10,8 +10,13 @@ from app.core.broker import ConnectionState
 class FakeAdapter:
     """Fake Broker that lets tests set the connection state directly."""
 
-    def __init__(self, *, state: ConnectionState = ConnectionState.DISCONNECTED) -> None:
-        self.name = "IBKR"
+    def __init__(
+        self,
+        *,
+        state: ConnectionState = ConnectionState.DISCONNECTED,
+        name: str = "IBKR",
+    ) -> None:
+        self.name = name
         self._state = state
 
     async def connect(self) -> None: pass
@@ -24,10 +29,10 @@ class FakeAdapter:
     async def get_account_summary(self): return []
 
 
-def make_client(state: ConnectionState) -> TestClient:
+def make_client(state: ConnectionState, *, name: str = "IBKR") -> TestClient:
     from app.main import create_app
 
-    app = create_app(broker=FakeAdapter(state=state))
+    app = create_app(broker=FakeAdapter(state=state, name=name))
     return TestClient(app)
 
 
@@ -66,6 +71,14 @@ def test_badge_renders_green_for_CONNECTED():
 
     assert "🟢" in response.text
     assert "IBKR connected" in response.text
+
+
+def test_badge_renders_tiger_name_without_uppercasing():
+    client = make_client(ConnectionState.CONNECTED, name="Tiger")
+    response = client.get("/healthz", headers={"HX-Request": "true"})
+
+    assert "Tiger connected" in response.text
+    assert "TIGER connected" not in response.text
 
 
 def test_badge_renders_red_for_DISCONNECTED():

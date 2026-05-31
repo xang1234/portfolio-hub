@@ -186,6 +186,18 @@ def test_healthz_reports_longbridge_broker():
     assert response.json() == {"longbridge": "connected"}
 
 
+def test_healthz_reports_tiger_broker():
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    app = create_app(broker=_Adapter("Tiger", state=ConnectionState.CONNECTED))
+
+    response = TestClient(app).get("/healthz")
+
+    assert response.json() == {"tiger": "connected"}
+
+
 def test_build_production_broker_includes_longbridge_when_enabled(monkeypatch):
     from app.core.live_positions import LivePositions
     from app.main import _build_production_broker
@@ -211,6 +223,44 @@ def test_build_production_broker_includes_longbridge_when_enabled(monkeypatch):
     assert broker.name == "Longbridge"
     assert broker.kwargs["account_id"] == "Longbridge"
     assert broker.kwargs["position_channel"] == "FUND"
+
+
+def test_build_production_broker_includes_tiger_when_enabled(monkeypatch):
+    from app.core.live_positions import LivePositions
+    from app.main import _build_production_broker
+
+    class _FakeTigerAdapter(_Adapter):
+        def __init__(self):
+            super().__init__("Tiger")
+            self.factory_kwargs = None
+
+        @classmethod
+        def from_env(cls, **kwargs):
+            adapter = cls()
+            adapter.factory_kwargs = kwargs
+            return adapter
+
+    monkeypatch.setenv("BROKERS_ENABLED", "tiger")
+    monkeypatch.setenv("TIGER_CONFIG_DIR", "/secure/tiger")
+    monkeypatch.setenv("TIGER_ACCOUNT", "TIGER-1")
+    monkeypatch.setenv("TIGER_BASE_CURRENCY", "USD")
+    monkeypatch.setenv("TIGER_MARKETS", "US,HK,SG")
+    monkeypatch.setattr(
+        "app.adapters.tiger.TigerAdapter",
+        _FakeTigerAdapter,
+    )
+
+    broker = _build_production_broker(
+        store=object(),
+        live_positions=LivePositions(),
+        fx_service=object(),
+    )
+
+    assert broker.name == "Tiger"
+    assert broker.factory_kwargs["env"] is not None
+    assert broker.factory_kwargs["env"]["TIGER_CONFIG_DIR"] == "/secure/tiger"
+    assert broker.factory_kwargs["fx_service"] is not None
+    assert isinstance(broker.factory_kwargs["live_positions"], LivePositions)
 
 
 def test_healthz_retry_restarts_disconnected_child_in_composite_broker():

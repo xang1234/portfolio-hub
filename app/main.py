@@ -237,6 +237,7 @@ def _status_label(statuses: dict[str, str]) -> str:
         return {
             "ibkr": "IBKR",
             "futu": "Futu",
+            "tiger": "Tiger",
             "longbridge": "Longbridge",
         }.get(name, name.upper())
     return "Brokers"
@@ -431,6 +432,16 @@ def _build_production_broker(
                 poll_interval_s=float(
                     os.environ.get("LONGBRIDGE_POLL_INTERVAL_S", "30")
                 ),
+            )
+        )
+    if "Tiger" in enabled:
+        from app.adapters.tiger import TigerAdapter
+
+        adapters.append(
+            TigerAdapter.from_env(
+                env=os.environ,
+                fx_service=fx_service,
+                live_positions=live_positions,
             )
         )
     if not adapters:
