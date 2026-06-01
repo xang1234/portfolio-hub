@@ -28,26 +28,17 @@ title="Toggle light / dark theme">◐</button>
 {% endblock %}
 
 {% block content %}
+{% from "partials/_hero_macros.html" import total_figures, today_figure %}
 {% if totals %}
 <section class="hero">
 <span class="hero-label">Total exposure (USD)</span>
 <div class="hero-row">
-<span class="total-mv-usd" title="Total market value (USD)">${{ "{:,.0f}".format(totals.mv_usd) }}</span>
-<span class="total-pnl-usd {% if totals.pnl_is_positive %}pnl-positive{% else %}pnl-negative{% endif %}"
-title="Total unrealized P&amp;L (USD)">{% if totals.pnl_is_positive %}+${{ "{:,.0f}".format(totals.pnl_usd) }}{% else %}-${{ "{:,.0f}".format(-totals.pnl_usd) }}{% endif %}</span>
-<span class="total-pnl-pct {% if totals.pnl_is_positive %}pnl-positive{% else %}pnl-negative{% endif %}"
-title="Unrealized P&amp;L %">{% if totals.pnl_is_positive %}+{% endif %}{{ "{:.2f}".format(totals.pnl_pct) }}%</span>
+{{ total_figures(totals) }}
 <svg class="spark" data-spark
 viewBox="0 0 220 48" width="220" height="48"
 preserveAspectRatio="none" aria-hidden="true"></svg>
 </div>
-{% if totals.has_intraday %}
-<div class="hero-today">
-<span class="hero-today__label">Today</span>
-<span class="hero-today__value {% if totals.intraday_pnl_is_positive %}pnl-positive{% else %}pnl-negative{% endif %}"
-title="Day-of P&amp;L (USD)">{% if totals.intraday_pnl_is_positive %}+{% endif %}${{ "{:,.0f}".format(totals.intraday_pnl_usd) }} ({% if totals.intraday_pnl_is_positive %}+{% endif %}{{ "{:.2f}".format(totals.intraday_pnl_pct) }}%)</span>
-</div>
-{% endif %}
+{{ today_figure(totals) }}
 <div class="alloc">
 <div class="alloc-bar" id="ph-alloc-bar"></div>
 <div class="alloc-legend" id="ph-alloc-legend"></div>
@@ -236,78 +227,8 @@ sse-swap="snapshot,positions">
 <p class="empty-state__hint">Make sure IB Gateway is connected and your account has holdings.</p>
 </div>
 {% endif %}
-<script>
-(function () {
-  var PALETTE = ['#5b9dff', '#34d399', '#fbbf24', '#f472b6', '#a78bfa',
-                 '#fb7185', '#22d3ee', '#84cc16', '#fb923c', '#94a3b8'];
-  // Defense-in-depth escape for any value that lands inside the legend's
-  // innerHTML concatenation. Today's inputs are controlled (IB exchange
-  // codes from a finite set + hardcoded PALETTE colours + emoji flags
-  // harvested from server-rendered markup), so no user-controlled string
-  // flows through. The escape keeps the pattern safe if a future feature
-  // ever lets users name their own holdings or add custom groupings.
-  function _esc(s) {
-    return String(s == null ? '' : s)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  }
-  function buildAllocation() {
-    var bar = document.getElementById('ph-alloc-bar');
-    var legend = document.getElementById('ph-alloc-legend');
-    if (!bar) return;
-    var rows = document.querySelectorAll('#positions-tbody .position-row');
-    var groups = {}, total = 0;
-    // Map exchange-code → flag emoji harvested from the row markup so the
-    // legend can show "🇺🇸 30%" instead of "TSEJ 30%". Falls back to the
-    // exchange code when no flag is available.
-    var keyFlag = {};
-    rows.forEach(function (r) {
-      var isCash = r.getAttribute('data-asset-class') === 'CASH';
-      var key = isCash ? 'Cash' : (r.getAttribute('data-exchange') || 'Other');
-      var v = parseFloat(r.getAttribute('data-mv-usd')) || 0;
-      if (v <= 0) return;
-      groups[key] = (groups[key] || 0) + v; total += v;
-      if (!keyFlag[key]) {
-        if (isCash) { keyFlag[key] = '💵'; }
-        else {
-          var flagEl = r.querySelector('.flag');
-          if (flagEl) keyFlag[key] = (flagEl.textContent || '').trim();
-        }
-      }
-    });
-    if (total <= 0) { bar.innerHTML = ''; if (legend) legend.innerHTML = ''; return; }
-    var entries = Object.keys(groups)
-      .map(function (k) { return [k, groups[k]]; })
-      .sort(function (a, b) { return b[1] - a[1]; });
-    bar.innerHTML = entries.map(function (e, i) {
-      var pct = e[1] / total * 100;
-      return '<span class="alloc-seg" style="width:' + pct + '%;background:'
-        + PALETTE[i % PALETTE.length] + '" title="' + _esc(e[0]) + ' '
-        + Math.round(pct) + '%"></span>';
-    }).join('');
-    if (legend) legend.innerHTML = entries.slice(0, 8).map(function (e, i) {
-      var pct = Math.round(e[1] / total * 100);
-      var label = keyFlag[e[0]] || e[0];
-      return '<span class="alloc-it" title="' + _esc(e[0]) + ' ' + pct + '%">'
-        + '<span class="alloc-sw" style="background:' + PALETTE[i % PALETTE.length] + '"></span>'
-        + _esc(label) + ' ' + pct + '%</span>';
-    }).join('');
-  }
-  function applySearch() {
-    var s = document.getElementById('ph-search'); if (!s) return;
-    var q = s.value.trim().toLowerCase();
-    rows().forEach(function (r) {
-      var hay = ((r.getAttribute('data-name-en') || '') + ' '
-        + (r.getAttribute('data-canonical-symbol') || '')).toLowerCase();
-      r.style.display = (!q || hay.indexOf(q) >= 0) ? '' : 'none';
-    });
-  }
-  function wireSearch() {
-    var s = document.getElementById('ph-search');
-    if (s && !s._phWired) { s._phWired = true; s.addEventListener('input', applySearch); }
-  }
-  buildAllocation(); wireSearch();
-  document.body.addEventListener('htmx:afterSwap', function () { buildAllocation(); wireSearch(); applySearch(); });
-})();
-</script>
+{# The hero allocation bar + legend are built by app.js (buildAllocation),
+   which runs on load and after every swap. It lived here as an inline
+   <script> until the strict CSP (script-src 'self', no 'unsafe-inline')
+   blocked inline execution — see app/static/app.js. #}
 {% endblock %}
