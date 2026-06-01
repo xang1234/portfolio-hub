@@ -1,0 +1,23 @@
+{# Shared hero figure markup. Rendered inline on the index hero AND as an
+   htmx out-of-band (OOB) fragment by the SSE stream, so the headline
+   "Total exposure" and "Today" P&L stay live alongside the holdings rows
+   (they live outside the #positions-tbody the SSE swap targets). Pass
+   oob=true to emit hx-swap-oob="true" so each SSE tick replaces these
+   elements in place by their stable id. #}
+{% macro total_figures(totals, oob=false) -%}
+<span class="total-mv-usd" id="ph-total-mv"{% if oob %} hx-swap-oob="true"{% endif %} title="Total market value (USD)">${{ "{:,.0f}".format(totals.mv_usd) }}</span>
+<span class="total-pnl-usd {% if totals.pnl_is_positive %}pnl-positive{% else %}pnl-negative{% endif %}" id="ph-total-pnl"{% if oob %} hx-swap-oob="true"{% endif %}
+title="Total unrealized P&amp;L (USD)">{% if totals.pnl_is_positive %}+${{ "{:,.0f}".format(totals.pnl_usd) }}{% else %}-${{ "{:,.0f}".format(-totals.pnl_usd) }}{% endif %}</span>
+<span class="total-pnl-pct {% if totals.pnl_is_positive %}pnl-positive{% else %}pnl-negative{% endif %}" id="ph-total-pnl-pct"{% if oob %} hx-swap-oob="true"{% endif %}
+title="Unrealized P&amp;L %">{% if totals.pnl_is_positive %}+{% endif %}{{ "{:.2f}".format(totals.pnl_pct) }}%</span>
+{%- endmacro %}
+
+{% macro today_figure(totals, oob=false) -%}
+{% if totals.has_intraday %}
+<div class="hero-today" id="ph-hero-today"{% if oob %} hx-swap-oob="true"{% endif %}>
+<span class="hero-today__label">Today</span>
+<span class="hero-today__value {% if totals.intraday_pnl_is_positive %}pnl-positive{% else %}pnl-negative{% endif %}"
+title="Day-of P&amp;L (USD)">{% if totals.intraday_pnl_is_positive %}+{% endif %}${{ "{:,.0f}".format(totals.intraday_pnl_usd) }} ({% if totals.intraday_pnl_is_positive %}+{% endif %}{{ "{:.2f}".format(totals.intraday_pnl_pct) }}%)</span>
+</div>
+{% endif %}
+{%- endmacro %}

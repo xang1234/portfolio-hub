@@ -186,6 +186,67 @@
         _fetchSparkData(account).then(data => _renderSpark(svg, data));
     }
 
+    // Hero allocation bar + legend. Groups visible holdings by exchange (cash
+    // pooled separately), sizing each segment by its share of total USD market
+    // value. Relocated here from an inline <script> in index.html: the page
+    // ships a strict CSP (script-src 'self', no 'unsafe-inline'), which blocked
+    // the inline version outright. Runs on load and after every swap so the bar
+    // tracks live SSE ticks.
+    const ALLOC_PALETTE = ['#5b9dff', '#34d399', '#fbbf24', '#f472b6', '#a78bfa',
+                           '#fb7185', '#22d3ee', '#84cc16', '#fb923c', '#94a3b8'];
+    // Defense-in-depth escape for values landing inside the legend's innerHTML.
+    // Today's inputs are controlled (IB exchange codes + hardcoded palette +
+    // server-rendered flag emoji), but this keeps the pattern safe if a future
+    // feature ever lets users name holdings or groupings.
+    function _escAlloc(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function buildAllocation() {
+        const bar = document.querySelector('#ph-alloc-bar');
+        const legend = document.querySelector('#ph-alloc-legend');
+        if (!bar) return;
+        const rows = document.querySelectorAll('#positions-tbody .position-row');
+        const groups = {};
+        let total = 0;
+        // Map exchange-code → flag emoji harvested from the row markup so the
+        // legend can show "🇺🇸 30%" instead of "TSEJ 30%". Falls back to the
+        // exchange code when no flag is available.
+        const keyFlag = {};
+        rows.forEach(function (r) {
+            const isCash = r.getAttribute('data-asset-class') === 'CASH';
+            const key = isCash ? 'Cash' : (r.getAttribute('data-exchange') || 'Other');
+            const v = parseFloat(r.getAttribute('data-mv-usd')) || 0;
+            if (v <= 0) return;
+            groups[key] = (groups[key] || 0) + v; total += v;
+            if (!keyFlag[key]) {
+                if (isCash) { keyFlag[key] = '💵'; }
+                else {
+                    const flagEl = r.querySelector('.flag');
+                    if (flagEl) keyFlag[key] = (flagEl.textContent || '').trim();
+                }
+            }
+        });
+        if (total <= 0) { bar.innerHTML = ''; if (legend) legend.innerHTML = ''; return; }
+        const entries = Object.keys(groups)
+            .map(function (k) { return [k, groups[k]]; })
+            .sort(function (a, b) { return b[1] - a[1]; });
+        bar.innerHTML = entries.map(function (e, i) {
+            const pct = e[1] / total * 100;
+            return '<span class="alloc-seg" style="width:' + pct + '%;background:'
+                + ALLOC_PALETTE[i % ALLOC_PALETTE.length] + '" title="' + _escAlloc(e[0]) + ' '
+                + Math.round(pct) + '%"></span>';
+        }).join('');
+        if (legend) legend.innerHTML = entries.slice(0, 8).map(function (e, i) {
+            const pct = Math.round(e[1] / total * 100);
+            const label = keyFlag[e[0]] || e[0];
+            return '<span class="alloc-it" title="' + _escAlloc(e[0]) + ' ' + pct + '%">'
+                + '<span class="alloc-sw" style="background:' + ALLOC_PALETTE[i % ALLOC_PALETTE.length] + '"></span>'
+                + _escAlloc(label) + ' ' + pct + '%</span>';
+        }).join('');
+    }
+
     // Tick-flash for SSE price updates. We snapshot prices in htmx:beforeSwap
     // (rows are about to be replaced), then in afterSwap compare each new row
     // to its previous value and animate it green/red briefly. Skips rows that
@@ -366,6 +427,7 @@
         tickTimestamps();
         initSort();
         attachLongPressHandlers();
+        buildAllocation();
     }
 
     if (document.readyState === 'loading') {
@@ -481,6 +543,9 @@
         attachThemeToggle();
         attachSearchHandler();
         applySearchToRows();
+        // Rebuild the allocation bar from the (possibly newly-swapped) rows so
+        // it tracks live SSE ticks and filter changes.
+        buildAllocation();
         // Refresh the sparkline only on swaps that could change its inputs
         // (full-body swap from chip filters). SSE row deltas tick many times
         // per minute and don't move equity-snapshot data, so refetching there

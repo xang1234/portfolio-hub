@@ -28,6 +28,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.core.broker import Broker, ConnectionState, Position
 from app.core.equity import build_equity_snapshot_row
 from app.core.live_positions import LivePositions, stream_events
+from app.render import _compute_totals, render_stream_payload
 from app.core.markets import (
     STATE_LABEL,
     MarketHours,
@@ -288,57 +289,6 @@ def _require_admin_token(request: Request) -> None:
         raise HTTPException(status_code=401, detail="invalid admin token")
 
 
-def _compute_totals(positions: list[Position]) -> dict:
-    """Aggregate USD market value and unrealized P&L across all positions.
-
-    Positions with fx_unavailable=True contribute 0 — we can't honestly
-    sum unknowns. The corresponding row displays — in its USD column so
-    the user knows the total is incomplete.
-
-    Returns a dict the index template can render directly. P&L sign and
-    percent are pre-computed here (rather than in the template) so the
-    template stays purely declarative.
-
-    `has_intraday` gates the hero's "Today" row: True iff at least one
-    position has both a live last_price and a populated previous_close
-    (i.e. its intraday_change_pct is not None). Without that gate, a
-    fresh boot with no prev-close cache would show "Today $0 (+0.0%)"
-    on a hero that's actually fully populated — misleading flat reading
-    that looks like real flat-day data.
-    """
-    total_mv_usd = sum(
-        p.market_value_usd for p in positions if not p.fx_unavailable
-    )
-    total_pnl_usd = sum(
-        p.unrealized_pnl_usd for p in positions if not p.fx_unavailable
-    )
-    pnl_pct = (total_pnl_usd / (total_mv_usd - total_pnl_usd) * 100.0
-               if (total_mv_usd - total_pnl_usd) != 0 else 0.0)
-
-    intraday_pnl_usd = sum(
-        p.intraday_pnl_usd for p in positions if not p.fx_unavailable
-    )
-    # cost basis at the open ≈ today's MV − today's intraday change in USD
-    intraday_basis_usd = total_mv_usd - intraday_pnl_usd
-    intraday_pnl_pct = (
-        intraday_pnl_usd / intraday_basis_usd * 100.0
-        if intraday_basis_usd > 0 else 0.0
-    )
-    has_intraday = any(
-        p.intraday_change_pct is not None for p in positions
-    )
-    return {
-        "mv_usd": total_mv_usd,
-        "pnl_usd": total_pnl_usd,
-        "pnl_pct": pnl_pct,
-        "pnl_is_positive": total_pnl_usd >= 0,
-        "intraday_pnl_usd": intraday_pnl_usd,
-        "intraday_pnl_pct": intraday_pnl_pct,
-        "intraday_pnl_is_positive": intraday_pnl_usd >= 0,
-        "has_intraday": has_intraday,
-    }
-
-
 # Every broker the Protocol can support, in display order. Filter chips
 # render this list and gray any that aren't in BROKERS_ENABLED so users
 # see the dimension exists before the adapter lands.
@@ -452,90 +402,6 @@ def _build_production_broker(
     from app.core.composite_broker import CompositeBroker
 
     return CompositeBroker(adapters)
-
-
-def _apply_filters(
-    positions: list[Position],
-    *,
-    active_account: str = "All",
-    active_asset: str = "All",
-    active_broker: str = "All",
-) -> list[Position]:
-    """Apply the three filter dimensions in turn. Returns a new list.
-
-    Hoisted out of the route so the SSE renderer can reuse it — sharing
-    one filter implementation prevents a live tick from reintroducing
-    rows the user just filtered out.
-    """
-    out = positions
-    if active_account and active_account != "All":
-        out = [p for p in out if p.account_id == active_account]
-    if active_asset and active_asset != "All":
-        out = [p for p in out if p.asset_class == active_asset]
-    if active_broker and active_broker != "All":
-        out = [p for p in out if p.broker == active_broker]
-    return out
-
-
-def _render_rows_for_filter(
-    positions: list[Position],
-    active_account: str = "All",
-    *,
-    active_asset: str = "All",
-    active_broker: str = "All",
-    templates_env=None,
-) -> str:
-    """Render <tr> rows for the SSE payload, filtered by all dimensions.
-
-    Live ticks must respect the same ?account= / ?asset= / ?broker=
-    filters the initial page-load used — otherwise the first SSE event
-    would overwrite a filtered tbody with the unfiltered set.
-    `active_account` is also passed into the partial context so the
-    per-row account pill is suppressed under a specific-account filter
-    (the pill is redundant when the user has already drilled down).
-
-    `templates_env` is optional; tests omit it and a fresh Jinja2
-    environment is built from `app/templates/`. The production app
-    reuses its own `templates.env` (registered globals included).
-    """
-    from jinja2 import Environment, FileSystemLoader
-
-    from app.core.symbols import flag_for_currency, flag_for_exchange
-
-    positions = _apply_filters(
-        positions,
-        active_account=active_account,
-        active_asset=active_asset,
-        active_broker=active_broker,
-    )
-    if not positions:
-        return ""
-    if templates_env is None:
-        templates_env = Environment(
-            loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True,
-        )
-        templates_env.globals["flag_for_exchange"] = flag_for_exchange
-        templates_env.globals["flag_for_currency"] = flag_for_currency
-        templates_env.globals["region_color_for_exchange"] = region_color_for_exchange
-    # region_color_for_exchange is on templates_env.globals (above), so the
-    # partial can call it directly without a per-render context key.
-    template = templates_env.get_template("partials/holdings_row.html")
-    # Pass totals so the Weight column renders correctly on SSE-streamed
-    # rows too — the partial divides position.market_value_usd by
-    # totals.mv_usd. The total is computed against the filtered set so
-    # weight is "share of what the user is currently looking at", not
-    # share of the whole portfolio (matches the visible allocation bar).
-    totals = _compute_totals(positions)
-    return "".join(
-        template.render({
-            "position": p,
-            "flag_for_exchange": flag_for_exchange,
-            "market_by_ib": {},
-            "active_account": active_account or "All",
-            "totals": totals,
-        })
-        for p in positions
-    )
 
 
 def create_app(
@@ -689,13 +555,6 @@ def create_app(
     templates.env.globals["flag_for_exchange"] = flag_for_exchange
     templates.env.globals["flag_for_currency"] = flag_for_currency
     templates.env.globals["region_color_for_exchange"] = region_color_for_exchange
-
-    def render_rows(positions: list[Position]) -> str:
-        """Legacy unfiltered renderer — preserved for callers that
-        pre-date the per-account filter."""
-        return _render_rows_for_filter(
-            positions, active_account="All", templates_env=templates.env,
-        )
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -861,7 +720,10 @@ def create_app(
         active_broker = broker or "All"
 
         def filtered_render(positions: list[Position]) -> str:
-            return _render_rows_for_filter(
+            # Rows + hero OOB fragment from one filtered/aggregated pass, so the
+            # headline "Total exposure" / "Today" (outside #positions-tbody)
+            # stay live and consistent with the rows on every tick.
+            return render_stream_payload(
                 positions,
                 active_account=active_account,
                 active_asset=active_asset,

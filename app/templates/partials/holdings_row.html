@@ -98,7 +98,7 @@ adds noise without information, so show — instead. #}
 </td>
 <td class="col-num col-alloc">
 {# Weight as a share of total exposure (USD). `totals` is injected by the
-   index route and by _render_rows_for_filter for SSE streams. When the
+   index route and by render_stream_payload for SSE streams. When the
    total is 0 (no positions / all fx-unavailable) or this row has no USD
    value, render — so the cell still aligns. #}
 {% set _tot = (totals.mv_usd if totals else 0) or 0 %}

@@ -1,0 +1,10 @@
+{#- One SSE push: the filtered holdings rows followed by the hero totals as an
+   out-of-band fragment, rendered by render_stream_payload from a single
+   filtered + aggregated pass so the headline total stays consistent with the
+   rows. The hero figures are wrapped in <template> so the span/div OOB
+   elements survive the browser's table-fostering when htmx parses a payload
+   that starts with <tr> rows — without it the parser hoists non-row elements
+   out of the table and htmx loses them. The whitespace trims keep the payload
+   starting at <tr> (htmx detects table fragments from the first tag). -#}
+{%- from "partials/_hero_macros.html" import total_figures, today_figure -%}
+{% for position in positions %}{% include "partials/holdings_row.html" %}{% endfor %}<template>{{ total_figures(totals, oob=true) }}{{ today_figure(totals, oob=true) }}</template>
