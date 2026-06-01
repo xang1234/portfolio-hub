@@ -17,6 +17,8 @@
     // Sort + theme persistence (localStorage keys)
     const SORT_KEY = 'portfolio-hub.sort';
     const DEFAULT_SORT = { key: 'mv_usd', dir: 'desc' };
+    // Sort keys compared as strings (vs. the numeric data-* default).
+    const STRING_SORT_KEYS = new Set(['country']);
     const THEME_KEY = 'portfolio-hub.theme';
 
     // Map<row-id, last-seen-price> snapshot taken in htmx:beforeSwap so
@@ -404,6 +406,17 @@
         return 'data-' + key.replace(/_/g, '-');
     }
 
+    function countryOf(row) {
+        // data-country is the canonical suffix (e.g. "700.HK" -> "HK"),
+        // emitted by the row partial; empty for cash / no-exchange rows.
+        const c = (row.getAttribute('data-country') || '').toUpperCase();
+        return c || '￿';  // cash / no-exchange rows sort to the end
+    }
+
+    function numAttr(row, key) {
+        return parseFloat(row.getAttribute(dataKeyAttr(key))) || 0;
+    }
+
     function applySort(state) {
         const tbody = document.querySelector('#positions-tbody');
         if (!tbody) return;
@@ -420,12 +433,20 @@
         });
         if (!state.dir) return;  // unsorted — leave row order as-is
         const rows = Array.from(tbody.querySelectorAll('tr'));
-        const attr = dataKeyAttr(state.key);
-        rows.sort((a, b) => {
-            const av = parseFloat(a.getAttribute(attr)) || 0;
-            const bv = parseFloat(b.getAttribute(attr)) || 0;
-            return state.dir === 'desc' ? bv - av : av - bv;
-        });
+        if (STRING_SORT_KEYS.has(state.key)) {
+            // Group by country, then market value (USD) descending within each.
+            const dir = state.dir === 'desc' ? -1 : 1;
+            rows.sort((a, b) => {
+                const c = countryOf(a).localeCompare(countryOf(b));
+                if (c !== 0) return dir * c;
+                return numAttr(b, 'mv_usd') - numAttr(a, 'mv_usd');
+            });
+        } else {
+            rows.sort((a, b) => {
+                const d = numAttr(a, state.key) - numAttr(b, state.key);
+                return state.dir === 'desc' ? -d : d;
+            });
+        }
         rows.forEach(r => tbody.appendChild(r));
     }
 

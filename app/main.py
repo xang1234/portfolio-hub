@@ -500,7 +500,11 @@ def _render_rows_for_filter(
     """
     from jinja2 import Environment, FileSystemLoader
 
-    from app.core.symbols import flag_for_currency, flag_for_exchange
+    from app.core.symbols import (
+        flag_for_currency,
+        flag_for_exchange,
+        suffix_for_exchange,
+    )
 
     positions = _apply_filters(
         positions,
@@ -517,6 +521,7 @@ def _render_rows_for_filter(
         templates_env.globals["flag_for_exchange"] = flag_for_exchange
         templates_env.globals["flag_for_currency"] = flag_for_currency
         templates_env.globals["region_color_for_exchange"] = region_color_for_exchange
+        templates_env.globals["suffix_for_exchange"] = suffix_for_exchange
     # region_color_for_exchange is on templates_env.globals (above), so the
     # partial can call it directly without a per-render context key.
     template = templates_env.get_template("partials/holdings_row.html")
@@ -684,11 +689,16 @@ def create_app(
 
     # Expose symbols helpers so templates can compute display data from
     # canonical fields without polluting the Position dataclass.
-    from app.core.symbols import flag_for_currency, flag_for_exchange
+    from app.core.symbols import (
+        flag_for_currency,
+        flag_for_exchange,
+        suffix_for_exchange,
+    )
 
     templates.env.globals["flag_for_exchange"] = flag_for_exchange
     templates.env.globals["flag_for_currency"] = flag_for_currency
     templates.env.globals["region_color_for_exchange"] = region_color_for_exchange
+    templates.env.globals["suffix_for_exchange"] = suffix_for_exchange
 
     def render_rows(positions: list[Position]) -> str:
         """Legacy unfiltered renderer — preserved for callers that

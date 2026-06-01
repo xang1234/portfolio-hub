@@ -489,6 +489,10 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   background: var(--ph-surface-2); border: 1px solid var(--ph-border);
   border-radius: var(--ph-r-lg); overflow: hidden; box-shadow: var(--ph-shadow);
 }
+/* Inner wrapper owns the horizontal scroll so the card can keep overflow:hidden
+   for its rounded corners. On wide screens the table fits and nothing scrolls;
+   on narrow screens the numeric columns scroll under the pinned name column. */
+.holdings-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .holdings-table {
   width: 100%; border-collapse: collapse; margin: 0;
   background: transparent;
@@ -537,7 +541,16 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
    overflow-wrap: anywhere beyond that. */
 .holdings-table .col-name {
   width: auto; min-width: 250px; max-width: 1200px;
+  /* Pin the name column so each row stays identifiable while the numeric
+     columns scroll. A sticky cell needs an opaque background or the scrolled
+     columns bleed through; surface-2 matches the card body, surface-3 the
+     header band. The right-edge box-shadow draws a subtle seam against the
+     scrolling columns. */
+  position: sticky; left: 0; z-index: 1;
+  background: var(--ph-surface-2);
+  box-shadow: 1px 0 0 var(--ph-border-soft);
 }
+.holdings-table thead th.col-name { z-index: 2; background: var(--ph-surface-3); }
 .holdings-table tbody td {
   padding: 12px 16px; border-bottom: 1px solid var(--ph-border-soft); vertical-align: middle;
 }
@@ -757,10 +770,9 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
 
 /* ---- 11. RESPONSIVE ------------------------------------------------------ */
 @media (max-width: 720px) {
-  /* Drop native MV column on smaller tablets too — keeps USD as the
-     eye-anchor; matches the mockup's mobile priority. */
-  .holdings-table thead th:nth-child(4),
-  .holdings-table tbody td:nth-child(4) { display: none; }
+  /* Columns are no longer hidden here — the table scrolls horizontally
+     (.holdings-scroll) with the name column pinned, so every column stays
+     reachable by scrolling rather than being dropped. */
   .hero { padding: 18px 18px; }
   .total-mv-usd { font-size: clamp(1.9rem, 7vw, 2.6rem); }
 }
@@ -770,4 +782,7 @@ button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 
   .hero { padding: 16px 16px; }
   .holdings-table thead th, .holdings-table tbody td { padding: 10px 10px; }
   .position-row .h-name, .position-row .name-en { font-size: 13.5px; }
+  /* Shrink the pinned name column so scrollable columns stay visible beside
+     it on a phone (default 250px would pin most of a ~360px viewport). */
+  .holdings-table .col-name { min-width: 150px; max-width: 60vw; }
 }

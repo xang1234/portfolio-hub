@@ -126,6 +126,36 @@ def test_flag_for_unknown_exchange_raises():
         flag_for_exchange("MARS-EXCHANGE")
 
 
+# suffix_for_exchange() --------------------------------------------------------
+
+
+def test_suffix_for_exchange_matches_canonical_symbol_suffix():
+    """The grouping suffix must equal the suffix canonical_symbol builds, so
+    holdings group by the same country their canonical symbol implies."""
+    from app.core.symbols import canonical_symbol, suffix_for_exchange
+
+    for native, exchange in (("700", "SEHK"), ("AAPL", "NASDAQ"), ("2330", "TWSE")):
+        suffix = suffix_for_exchange(exchange)
+        assert canonical_symbol(native, exchange) == f"{native}.{suffix}"
+
+
+def test_suffix_for_exchange_is_empty_for_cash_no_exchange():
+    """Cash rows carry no exchange — they group to the end, not under a
+    bogus country."""
+    from app.core.symbols import suffix_for_exchange
+
+    assert suffix_for_exchange("") == ""
+
+
+def test_suffix_for_exchange_unknown_exchange_raises():
+    """A stock with an unmapped exchange is a bug, not a blank country —
+    raise, consistent with the other helpers."""
+    from app.core.symbols import suffix_for_exchange
+
+    with pytest.raises(ValueError, match="unknown exchange"):
+        suffix_for_exchange("MARS-EXCHANGE")
+
+
 # Additional IB exchange codes encountered live on real accounts --------------
 
 

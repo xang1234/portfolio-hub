@@ -189,10 +189,13 @@ aria-modal="true">
 </div>
 {% if positions %}
 <div class="holdings-card">
+<div class="holdings-scroll">
 <table class="holdings-table">
 <thead>
 <tr>
-<th class="col-name">Holding</th>
+<th class="col-name sortable" data-sort-key="country" role="button" tabindex="0">
+Holding <span class="sort-indicator" data-sort-indicator></span>
+</th>
 <th class="col-num sortable" data-sort-key="quantity" role="button" tabindex="0">
 Qty <span class="sort-indicator" data-sort-indicator></span>
 </th>
@@ -224,6 +227,7 @@ sse-swap="snapshot,positions">
 {% endfor %}
 </tbody>
 </table>
+</div>
 </div>
 {% else %}
 <div class="empty-state" role="status">

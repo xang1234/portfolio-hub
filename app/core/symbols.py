@@ -160,6 +160,22 @@ def canonical_symbol(native_symbol: str, primary_exchange: str) -> str:
     return f"{native_symbol}.{suffix}"
 
 
+def suffix_for_exchange(primary_exchange: str) -> str:
+    """Return the country/region suffix for an IB exchange (the "US" in
+    "AAPL.US"), used to group holdings by country.
+
+    Empty string for cash / no-exchange rows; raises on an unknown non-empty
+    exchange, mirroring the no-silent-fallback rule the other helpers follow
+    (a stock with an unmapped exchange is a bug, not a blank country).
+    """
+    if not primary_exchange:
+        return ""
+    try:
+        return IB_EXCHANGE_TO_SUFFIX[primary_exchange]
+    except KeyError:
+        raise ValueError(f"unknown exchange: {primary_exchange!r}") from None
+
+
 def flag_for_exchange(primary_exchange: str) -> str:
     """Return the country/region flag emoji for an IB primary exchange code.
 

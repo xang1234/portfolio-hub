@@ -12,6 +12,7 @@ data-exchange="{{ position.exchange }}"
 data-currency="{{ position.currency }}"
 data-native-key="{{ position.native_key }}"
 data-canonical-symbol="{{ position.canonical_symbol }}"
+data-country="{{ suffix_for_exchange(position.exchange) }}"
 data-name-en="{{ position.name_en }}"
 data-asset-class="{{ position.asset_class }}"
 data-row-detail>
@@ -109,5 +110,4 @@ adds noise without information, so show — instead. #}
 <span class="pnl-na">—</span>
 {% endif %}
 </td>
-<td class="col-num col-weight"><span class="wt-bar"><span class="wt-fill"></span></span><span class="wt-pct"></span></td>
 </tr>
