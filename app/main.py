@@ -550,11 +550,16 @@ def create_app(
 
     # Expose symbols helpers so templates can compute display data from
     # canonical fields without polluting the Position dataclass.
-    from app.core.symbols import flag_for_currency, flag_for_exchange
+    from app.core.symbols import (
+        flag_for_currency,
+        flag_for_exchange,
+        suffix_for_exchange,
+    )
 
     templates.env.globals["flag_for_exchange"] = flag_for_exchange
     templates.env.globals["flag_for_currency"] = flag_for_currency
     templates.env.globals["region_color_for_exchange"] = region_color_for_exchange
+    templates.env.globals["suffix_for_exchange"] = suffix_for_exchange
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from app.core.broker import Position
 from app.core.markets import region_color_for_exchange
-from app.core.symbols import flag_for_exchange
+from app.core.symbols import flag_for_exchange, suffix_for_exchange
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -33,6 +33,7 @@ def _fallback_env():
     env.globals["flag_for_exchange"] = flag_for_exchange
     env.globals["flag_for_currency"] = flag_for_currency
     env.globals["region_color_for_exchange"] = region_color_for_exchange
+    env.globals["suffix_for_exchange"] = suffix_for_exchange
     return env
 
 
