@@ -86,9 +86,9 @@ async def _first_snapshot(generator) -> str:
 async def test_sse_render_rows_filters_by_active_account():
     """Calling the production render-rows closure with active_account=U1
     must return HTML for only U1 rows; U2 rows must be absent."""
-    from app.main import _render_rows_for_filter
+    from app.render import render_stream_payload
 
-    rows_u1 = _render_rows_for_filter(
+    rows_u1 = render_stream_payload(
         [_pos("U1", "AAPL.US", "APPLE"), _pos("U2", "MSFT.US", "MICROSOFT")],
         active_account="U1",
     )
@@ -98,9 +98,9 @@ async def test_sse_render_rows_filters_by_active_account():
 
 
 async def test_sse_render_rows_all_includes_every_account():
-    from app.main import _render_rows_for_filter
+    from app.render import render_stream_payload
 
-    rows_all = _render_rows_for_filter(
+    rows_all = render_stream_payload(
         [_pos("U1", "AAPL.US", "APPLE"), _pos("U2", "MSFT.US", "MICROSOFT")],
         active_account="All",
     )
@@ -110,9 +110,9 @@ async def test_sse_render_rows_all_includes_every_account():
 
 
 async def test_sse_render_rows_suppresses_account_pill_under_filter():
-    from app.main import _render_rows_for_filter
+    from app.render import render_stream_payload
 
-    rows = _render_rows_for_filter(
+    rows = render_stream_payload(
         [_pos("U1", "AAPL.US", "APPLE")], active_account="U1",
     )
 
@@ -120,9 +120,9 @@ async def test_sse_render_rows_suppresses_account_pill_under_filter():
 
 
 async def test_sse_render_rows_shows_account_pill_under_all():
-    from app.main import _render_rows_for_filter
+    from app.render import render_stream_payload
 
-    rows = _render_rows_for_filter(
+    rows = render_stream_payload(
         [_pos("U1", "AAPL.US", "APPLE")], active_account="All",
     )
 
@@ -133,14 +133,14 @@ async def test_sse_endpoint_emits_filtered_snapshot_for_account_query():
     """End-to-end: an explicit ?account=U1 on the SSE URL drives the
     same render path. We rely on the underlying stream_events generator
     so the test doesn't hang on an open HTTP connection."""
-    from app.main import _render_rows_for_filter
+    from app.render import render_stream_payload
 
     live = LivePositions()
     live.set_position(_pos("U1", "AAPL.US", "APPLE"))
     live.set_position(_pos("U2", "MSFT.US", "MICROSOFT"))
 
     def render(ps):
-        return _render_rows_for_filter(ps, active_account="U1")
+        return render_stream_payload(ps, active_account="U1")
 
     gen = stream_events(live, render, min_interval=0.01, heartbeat_interval=10.0)
     data = await _first_snapshot(gen)

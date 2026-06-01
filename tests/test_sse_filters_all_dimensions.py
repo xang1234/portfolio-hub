@@ -6,9 +6,10 @@ into the SSE path. Without this fix, the first 'snapshot' tick would
 overwrite the filtered tbody with the unfiltered set, silently undoing
 asset/broker filters within seconds.
 
-These tests target `_render_rows_for_filter` and `_apply_filters`
+These tests target `render_stream_payload` (the SSE payload renderer)
 directly (the SSE generator just hands a closure to `stream_events`,
-so the unit-level test is the cleanest signal).
+so the unit-level test is the cleanest signal). The hero OOB fragment it
+appends carries only totals, so the row-presence assertions are unaffected.
 """
 
 import asyncio
@@ -48,8 +49,8 @@ def _cash(account="U1", broker="IBKR", currency="HKD", name="Hong Kong Dollar"):
 
 
 def _render(positions, **filters):
-    from app.main import _render_rows_for_filter
-    return _render_rows_for_filter(positions, **filters)
+    from app.render import render_stream_payload
+    return render_stream_payload(positions, **filters)
 
 
 # Asset filter on SSE path ----------------------------------------------
@@ -126,14 +127,14 @@ async def _first_snapshot(generator) -> str:
 async def test_sse_snapshot_honors_asset_filter_end_to_end():
     """Plug the renderer into stream_events the way the SSE route
     does and assert the resulting wire-format event is filtered."""
-    from app.main import _render_rows_for_filter
+    from app.render import render_stream_payload
 
     live = LivePositions()
     live.set_position(_stk(name="APPLE"))
     live.set_position(_cash(name="Hong Kong Dollar"))
 
     def render(ps):
-        return _render_rows_for_filter(ps, active_asset="STK")
+        return render_stream_payload(ps, active_asset="STK")
 
     gen = stream_events(live, render, min_interval=0.01, heartbeat_interval=10.0)
     data = await _first_snapshot(gen)
