@@ -11,8 +11,8 @@ from app.core.broker import ConnectionState
 
 
 class FakeAdapter:
-    def __init__(self, *, state: ConnectionState) -> None:
-        self.name = "IBKR"
+    def __init__(self, *, state: ConnectionState, name: str = "IBKR") -> None:
+        self.name = name
         self._state = state
         self.start_calls = 0
 
@@ -166,6 +166,44 @@ def test_restart_action_is_shown_when_no_auth_admin_restart_is_configured(monkey
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
     client, _ = make_client(ConnectionState.RECONNECTING)
     response = client.get("/healthz", headers={"HX-Request": "true"})
+
+    assert "/admin/ibkr-gateway/restart" in response.text
+    assert "Restart Gateway" in response.text
+
+
+def test_restart_action_is_hidden_when_only_non_ibkr_child_is_down(monkeypatch):
+    from app.core.composite_broker import CompositeBroker
+    from app.main import create_app
+
+    monkeypatch.setenv("IBKR_GATEWAY_RESTART_COMMAND", "true")
+    monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    app = create_app(
+        broker=CompositeBroker([
+            FakeAdapter(state=ConnectionState.CONNECTED, name="IBKR"),
+            FakeAdapter(state=ConnectionState.DISCONNECTED, name="Futu"),
+        ])
+    )
+    response = TestClient(app).get("/healthz", headers={"HX-Request": "true"})
+
+    assert "/admin/ibkr-gateway/restart" not in response.text
+    assert "Restart Gateway" not in response.text
+
+
+def test_restart_action_is_shown_when_ibkr_child_is_down(monkeypatch):
+    from app.core.composite_broker import CompositeBroker
+    from app.main import create_app
+
+    monkeypatch.setenv("IBKR_GATEWAY_RESTART_COMMAND", "true")
+    monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    app = create_app(
+        broker=CompositeBroker([
+            FakeAdapter(state=ConnectionState.DISCONNECTED, name="IBKR"),
+            FakeAdapter(state=ConnectionState.CONNECTED, name="Futu"),
+        ])
+    )
+    response = TestClient(app).get("/healthz", headers={"HX-Request": "true"})
 
     assert "/admin/ibkr-gateway/restart" in response.text
     assert "Restart Gateway" in response.text

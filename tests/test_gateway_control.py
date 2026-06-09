@@ -1,5 +1,6 @@
 import asyncio
 import errno
+import logging
 import os
 import sys
 import time
@@ -201,7 +202,7 @@ def test_admin_gateway_restart_endpoint_returns_503_when_disabled(monkeypatch):
     assert "disabled" in response.json().get("detail", "").lower()
 
 
-def test_admin_gateway_restart_endpoint_hides_stderr_on_failure(monkeypatch):
+def test_admin_gateway_restart_endpoint_hides_stderr_on_failure(monkeypatch, caplog):
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
     monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
     monkeypatch.setenv(
@@ -209,11 +210,13 @@ def test_admin_gateway_restart_endpoint_hides_stderr_on_failure(monkeypatch):
         f"{sys.executable} -c \"import sys; print('secret-token-123', file=sys.stderr); sys.exit(9)\"",
     )
 
+    caplog.set_level(logging.WARNING, logger="app.main")
     response = _client().post("/admin/ibkr-gateway/restart")
 
     assert response.status_code == 502
     assert response.json() == {"detail": "gateway restart command failed"}
     assert "secret-token-123" not in response.text
+    assert "secret-token-123" not in caplog.text
 
 
 def test_admin_gateway_restart_endpoint_success(monkeypatch):

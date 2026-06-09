@@ -353,6 +353,13 @@ def _gateway_restart_visible() -> bool:
     )
 
 
+def _gateway_restart_visible_for_statuses(statuses: dict[str, str]) -> bool:
+    return (
+        _gateway_restart_visible()
+        and statuses.get("ibkr") in {"reconnecting", "disconnected"}
+    )
+
+
 def _env_optional_bool(name: str) -> bool | None:
     raw = os.environ.get(name)
     if raw is None or raw.strip() == "":
@@ -640,7 +647,9 @@ def create_app(
                     "state": state,
                     "backoff_delay": backoff_delay,
                     "broker_label": _status_label(statuses),
-                    "gateway_restart_visible": _gateway_restart_visible(),
+                    "gateway_restart_visible": _gateway_restart_visible_for_statuses(
+                        statuses,
+                    ),
                 },
             )
         return JSONResponse(statuses)
@@ -678,7 +687,9 @@ def create_app(
                 "state": _state_to_string(conn_state),
                 "backoff_delay": backoff_delay,
                 "broker_label": _status_label(statuses),
-                "gateway_restart_visible": _gateway_restart_visible(),
+                "gateway_restart_visible": _gateway_restart_visible_for_statuses(
+                    statuses,
+                ),
             },
         )
 
@@ -757,11 +768,11 @@ def create_app(
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except GatewayRestartFailed as exc:
             _LOG.warning(
-                "gateway restart command failed: %s exit_code=%s stdout=%r stderr=%r",
+                "gateway restart command failed: %s exit_code=%s stdout_len=%s stderr_len=%s",
                 exc,
                 exc.exit_code,
-                exc.stdout,
-                exc.stderr,
+                len(exc.stdout),
+                len(exc.stderr),
             )
             raise HTTPException(
                 status_code=502,
@@ -930,7 +941,9 @@ def create_app(
                 "all_known_brokers": _ALL_KNOWN_BROKERS,
                 "broker_states": broker_states,
                 "broker_label": _status_label(broker_states),
-                "gateway_restart_visible": _gateway_restart_visible(),
+                "gateway_restart_visible": _gateway_restart_visible_for_statuses(
+                    broker_states,
+                ),
                 "updated_at_iso": datetime.now(timezone.utc).isoformat(),
             },
         )
