@@ -14,9 +14,9 @@ If the dashboard shows IBKR connected, do nothing.
 
 If the dashboard shows reconnecting for less than 2 minutes, wait. The adapter is already reconnecting with backoff and may recover without intervention.
 
-When these auth-resilience controls are deployed, if reconnecting continues, use Retry now in the dashboard to ask the adapter to reconnect immediately.
+If reconnecting continues, use Retry now in the dashboard to ask the adapter to reconnect immediately.
 
-When Gateway restart controls are deployed and configured, if Retry now does not recover the connection, restart Gateway.
+When Gateway restart is configured, if Retry now does not recover the connection, restart Gateway.
 
 Approve manual IBKR Mobile authentication only if prompted by IBKR, or if a configured Telegram alert says manual auth is likely needed.
 
@@ -45,18 +45,18 @@ Restart Gateway also uses the existing admin route protection. The dashboard but
 
 ## Retry Now vs Restart Gateway
 
-When deployed, Retry now tells Portfolio Hub's `IbkrAdapter` to reconnect to the existing Gateway session immediately. Use it when Gateway is probably still running and the dashboard is waiting through reconnect backoff.
+Retry now tells Portfolio Hub's `IbkrAdapter` to reconnect to the existing Gateway session immediately. Use it when Gateway is probably still running and the dashboard is waiting through reconnect backoff.
 
-When deployed and configured, Restart Gateway restarts the IB Gateway/TWS container/session. Use it when Gateway is unavailable, stuck, or past the point where adapter reconnects are recovering. Restarting Gateway may trigger IBKR Mobile authentication if IBKR no longer accepts the preserved login token.
+When configured, Restart Gateway restarts the IB Gateway/TWS container/session. Use it when Gateway is unavailable, stuck, or past the point where adapter reconnects are recovering. Restarting Gateway may trigger IBKR Mobile authentication if IBKR no longer accepts the preserved login token.
 
 ## Telegram Alerts
 
-Telegram alerts are sent after `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are configured and the alerting task is deployed.
+Telegram alerts are disabled by default and sent after `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are configured.
 
 `reconnecting`: Portfolio Hub detected a connection drop and is trying to reconnect with backoff. Wait briefly unless it persists.
 
-`unavailable >2 minutes`: The connection has not recovered within 2 minutes. When those controls are deployed, try Retry now, then restart Gateway if needed.
+`unavailable >2 minutes`: The connection has not recovered within 2 minutes. Try Retry now, then restart Gateway if needed.
 
-`disconnected/backoff exhausted`: Automatic reconnect attempts are exhausted. When restart controls are deployed, restart Gateway and be ready to approve IBKR Mobile if prompted.
+`disconnected/backoff exhausted`: Automatic reconnect attempts are exhausted. Restart Gateway if configured and be ready to approve IBKR Mobile if prompted.
 
 `recovered`: Portfolio Hub reconnected successfully. No action is needed.
