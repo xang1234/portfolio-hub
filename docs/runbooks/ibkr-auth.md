@@ -16,7 +16,7 @@ If the dashboard shows reconnecting for less than 2 minutes, wait. The adapter i
 
 When these auth-resilience controls are deployed, if reconnecting continues, use Retry now in the dashboard to ask the adapter to reconnect immediately.
 
-When Gateway restart controls are deployed, if Retry now does not recover the connection, restart Gateway.
+When Gateway restart controls are deployed and configured, if Retry now does not recover the connection, restart Gateway.
 
 Approve manual IBKR Mobile authentication only if prompted by IBKR, or if a configured Telegram alert says manual auth is likely needed.
 
@@ -32,11 +32,22 @@ RELOGIN_AFTER_TWOFA_TIMEOUT=yes
 
 `TWS_COLD_RESTART` maps to IBC's `ColdRestartTime`. IBC applies that field only for the Sunday cold restart, so the value is only the local `HH:MM` time, not a day plus time. With the default `TZ=Asia/Singapore`, `15:30` Sunday is safely after 01:00 US/Eastern in both US daylight saving and standard time.
 
+Gateway restart is opt-in and disabled by default:
+
+```dotenv
+IBKR_GATEWAY_RESTART_COMMAND=
+IBKR_GATEWAY_RESTART_TIMEOUT_S=30
+```
+
+`IBKR_GATEWAY_RESTART_COMMAND` must be configured before Restart Gateway appears or works. Keep it blank to disable the control. Prefer pointing this at a host wrapper script; if that wrapper runs a Docker Compose restart command, keep that capability in the host/script environment rather than expanding dashboard container privileges.
+
+Restart Gateway also uses the existing admin route protection. It only works when admin auth is satisfied: set `ADMIN_TOKEN` and pass it as `X-Admin-Token`, or explicitly opt out for trusted local/dev use with `ADMIN_ALLOW_NO_AUTH=1`.
+
 ## Retry Now vs Restart Gateway
 
 When deployed, Retry now tells Portfolio Hub's `IbkrAdapter` to reconnect to the existing Gateway session immediately. Use it when Gateway is probably still running and the dashboard is waiting through reconnect backoff.
 
-When deployed, Restart Gateway restarts the IB Gateway/TWS container/session. Use it when Gateway is unavailable, stuck, or past the point where adapter reconnects are recovering. Restarting Gateway may trigger IBKR Mobile authentication if IBKR no longer accepts the preserved login token.
+When deployed and configured, Restart Gateway restarts the IB Gateway/TWS container/session. Use it when Gateway is unavailable, stuck, or past the point where adapter reconnects are recovering. Restarting Gateway may trigger IBKR Mobile authentication if IBKR no longer accepts the preserved login token.
 
 ## Telegram Alerts
 

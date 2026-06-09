@@ -678,6 +678,36 @@ def create_app(
                 inserted += 1
         return JSONResponse({"inserted": inserted})
 
+    @app.post("/admin/ibkr-gateway/restart")
+    async def admin_ibkr_gateway_restart(request: Request):
+        """Protected opt-in hook for restarting IB Gateway."""
+        _require_admin_token(request)
+
+        from app.core.gateway_control import (
+            GatewayRestartDisabled,
+            GatewayRestartFailed,
+            restart_gateway,
+        )
+
+        try:
+            result = await restart_gateway()
+        except GatewayRestartDisabled as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except GatewayRestartFailed as exc:
+            _LOG.warning(
+                "gateway restart command failed: %s exit_code=%s stdout=%r stderr=%r",
+                exc,
+                exc.exit_code,
+                exc.stdout,
+                exc.stderr,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="gateway restart command failed",
+            ) from exc
+
+        return JSONResponse({"status": "ok", "exit_code": result.exit_code})
+
     @app.get("/api/equity-history")
     async def equity_history(request: Request, account: str | None = None, days: int = 60):
         """Time series of NLV (USD) for the hero sparkline.
