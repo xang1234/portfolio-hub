@@ -16,6 +16,7 @@ from pathlib import Path
 
 import asyncio
 import logging
+import math
 import os
 from typing import Callable, Literal
 
@@ -316,6 +317,30 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        _LOG.warning("Invalid %s=%r; using default %.1f", name, raw, default)
+        return default
+    if not math.isfinite(value) or value <= 0:
+        _LOG.warning("Invalid %s=%r; using default %.1f", name, raw, default)
+        return default
+    return value
+
+
+def _ibkr_monitor_broker(broker: Broker) -> Broker | None:
+    if broker.name.lower() == "ibkr":
+        return broker
+    for adapter in getattr(broker, "adapters", ()):
+        if adapter.name.lower() == "ibkr":
+            return adapter
+    return None
+
+
 def _gateway_restart_enabled() -> bool:
     return bool(os.environ.get("IBKR_GATEWAY_RESTART_COMMAND", "").strip())
 
@@ -446,10 +471,12 @@ def create_app(
 
     reconcile_task: asyncio.Task | None = None
     snapshot_task: asyncio.Task | None = None
+    connection_monitor_task: asyncio.Task | None = None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        nonlocal broker, store, fx_service, reconcile_task, snapshot_task
+        nonlocal broker, store, fx_service
+        nonlocal reconcile_task, snapshot_task, connection_monitor_task
         if manage_lifecycle:
             from app.core.fx import FxService
             from app.db.store import Store
@@ -505,9 +532,30 @@ def create_app(
                 scheduled_snapshot_loop(broker, store, market_hours),
             )
             snapshot_task.add_done_callback(_log_loop_crash("equity snapshot"))
+
+            from app.core.notifications import build_notifier
+            from app.jobs.connection_monitor import monitor_connection
+
+            ibkr_broker = _ibkr_monitor_broker(broker)
+            if ibkr_broker is not None:
+                notifier = build_notifier()
+                connection_monitor_task = asyncio.create_task(
+                    monitor_connection(
+                        ibkr_broker,
+                        notifier=notifier,
+                        interval_s=_env_float("CONNECTION_MONITOR_INTERVAL_S", 30.0),
+                        attention_after_s=_env_float(
+                            "IBKR_AUTH_ATTENTION_AFTER_S", 120.0,
+                        ),
+                    ),
+                )
+                connection_monitor_task.add_done_callback(
+                    _log_loop_crash("connection monitor"),
+                )
+                app.state.connection_monitor_task = connection_monitor_task
         yield
         if manage_lifecycle:
-            for t in (reconcile_task, snapshot_task):
+            for t in (reconcile_task, snapshot_task, connection_monitor_task):
                 if t is not None and not t.done():
                     t.cancel()
                     try:
