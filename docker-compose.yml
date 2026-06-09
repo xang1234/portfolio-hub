@@ -11,6 +11,10 @@ services:
       RELOGIN_AFTER_TWOFA_TIMEOUT: ${RELOGIN_AFTER_TWOFA_TIMEOUT:-yes}
       READ_ONLY_LOGIN: ${READ_ONLY_LOGIN:-yes}
       READ_ONLY_API: ${READ_ONLY_API:-yes}
+      AUTO_RESTART_TIME: ${AUTO_RESTART_TIME:-06:00 AM}
+      AUTO_LOGOFF_TIME: ${AUTO_LOGOFF_TIME:-}
+      TWS_COLD_RESTART: ${TWS_COLD_RESTART:-15:30}
+      TWOFA_EXIT_INTERVAL: ${TWOFA_EXIT_INTERVAL:-60}
       # TRUSTED_IPS is NOT an env var the gnzsnz image processes. We control
       # TrustedIPs by bind-mounting our own jts.ini.tmpl below.
       TIME_ZONE: ${TZ:-Asia/Singapore}

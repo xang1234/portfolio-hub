@@ -52,11 +52,11 @@ A lightweight, mobile-friendly portfolio dashboard for a personal trading setup 
 | **Time display** | Exchange-local time + relative offset ("Closes at 16:00 HKT · in 1h 23m"). No server/client TZ juggling. Optional v1.1: toggle to also show user-local time. |
 | **CASH and market hours** | CASH positions (FX balances) never contribute exchanges to the market-status panel. Panel is driven by `{p.exchange for p in positions if p.asset_class == "STK"}`. |
 | **Auth** | None — Tailscale handles network-level access control. **Tailscale Funnel explicitly disabled** (the app has no app-layer auth and must never be reachable outside the Tailnet). Dashboard binds to the Tailnet interface only. |
-| **IBKR 2FA** | `TWOFA_DEVICE=mobile` — IBKR Mobile push, one tap per day on phone. TOTP migration deferred to later iteration. |
-| **IBKR daily restart** | `RELOGIN_AFTER_TWOFA_TIMEOUT=yes`. `IbkrAdapter` registers `disconnectedEvent` handler → reconnect with exponential backoff (5s, 15s, 60s) → re-subscribe all `reqMktData` lines. UI shows `🔴 IBKR reconnecting...` badge during the gap; SSE keeps pushing last-known prices with a stale-data flag. |
+| **IBKR auth** | `READ_ONLY_LOGIN=yes` + `READ_ONLY_API=yes` for the read-only dashboard. IB Gateway/TWS still restarts daily, but Auto Restart should avoid daily phone reauthentication; manual auth is expected weekly after the Saturday/Sunday reset or when IBKR invalidates the token. |
+| **IBKR daily restart** | `AUTO_RESTART_TIME` configures the daily Gateway restart. `IbkrAdapter` reconnects with backoff and can be manually retried from the UI. |
 | **Read-Only API mode** | `READ_ONLY_API=yes` in gateway config for v1. Prevents accidental order placement from a misconfigured adapter. Disabled when order entry is added later. |
-| **Trusted IPs** | `TRUSTED_IPS=127.0.0.1,172.16.0.0/12` in gateway env so the `dashboard` container can reach `ib-gateway` over the Docker bridge network. |
-| **Volumes** | Named Docker volume `ib-gateway-config` for `/root/Jts` (preserves 2FA registration). Bind mount `./data` for SQLite. Both survive container rebuilds. |
+| **Trusted IPs** | Controlled by the mounted `gateway/jts.ini.tmpl`, not a `.env` variable in this Compose deployment. The template allows `127.0.0.1` and `172.16.0.0/12` so the `dashboard` container can reach `ib-gateway` over the Docker bridge network. |
+| **Volumes** | Named Docker volume `ib-gateway-config` for `/home/ibgateway/Jts` (preserves 2FA registration). Bind mount `./data` for SQLite. Both survive container rebuilds. |
 | **Restart policy** | `restart: unless-stopped` on both services. |
 | **Mobile UX — column priorities** | Portrait shows 5 columns: `[🇭🇰 Name + symbol subtext] · Qty · Last · MV USD · P&L USD`. Hidden in portrait, shown landscape/desktop: avg cost, broker, account_id, exchange, native MV/P&L. Row long-press → detail card. |
 | **Mobile UX — country flag** | A country/territory flag emoji appears inline at the start of the Name column for every STK row. **Hong Kong (🇭🇰) and Taiwan (🇹🇼) are always rendered separately from mainland China (🇨🇳)** — this is a hard requirement, not a default. Mapping in `app/core/symbols.py`: `HKEX→🇭🇰`, `TWSE→🇹🇼`, `SSE/SZSE→🇨🇳`, `NYSE/NASDAQ/ARCA/AMEX→🇺🇸`, `TSE/OSE→🇯🇵`, `KSE/KOSDAQ→🇰🇷`, `ASX→🇦🇺`, `LSE/IOB→🇬🇧`, `SGX→🇸🇬`, `EBS/SIX→🇨🇭`, `TSX→🇨🇦`. CASH rows show the currency flag instead (e.g., 🇭🇰 for HKD). |
@@ -79,7 +79,7 @@ A lightweight, mobile-friendly portfolio dashboard for a personal trading setup 
 
 ```
 portfolio-hub/
-├── docker-compose.yml                # ib-gateway (gnzsnz) + dashboard service; TRUSTED_IPS, READ_ONLY_API=yes, TWOFA_DEVICE=mobile, RELOGIN_AFTER_TWOFA_TIMEOUT=yes, named volume for /root/Jts
+├── docker-compose.yml                # ib-gateway (gnzsnz) + dashboard service; READ_ONLY_LOGIN=yes, READ_ONLY_API=yes, AUTO_RESTART_TIME, named volume for /home/ibgateway/Jts
 ├── .env.example                      # IB_USER, IB_PASS, TRADING_MODE=live, TZ, BROKERS_ENABLED=ibkr
 ├── pyproject.toml                    # ib_async, fastapi, uvicorn, exchange_calendars, jinja2, sse-starlette, aiosqlite, pyxirr (future)
 ├── app/
