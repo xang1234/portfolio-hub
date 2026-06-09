@@ -586,24 +586,27 @@ def create_app(
 
     @app.post("/healthz/retry")
     async def healthz_retry(request: Request):
-        """Manual retry hook for the DISCONNECTED state.
+        """Manual retry hook for stalled broker connection states.
 
-        Only acts when the adapter is genuinely DISCONNECTED — clicking on
-        a CONNECTED adapter would tear down the live session, and clicking
-        on RECONNECTING would spawn a parallel loop. In both cases we just
-        re-render the current badge.
+        Modern adapters may expose retry_now() to wake reconnecting loops.
+        Older brokers keep the disconnected-only start fallback.
         """
         broker = request.app.state.broker
         conn_state = await broker.get_connection_state()
-        retry_disconnected = getattr(broker, "retry_disconnected", None)
-        if callable(retry_disconnected):
-            await retry_disconnected()
+        retry_now = getattr(broker, "retry_now", None)
+        if callable(retry_now):
+            await retry_now()
             conn_state = await broker.get_connection_state()
-        elif conn_state == ConnectionState.DISCONNECTED:
-            start = getattr(broker, "start", None)
-            if callable(start):
-                await start()
-            conn_state = await broker.get_connection_state()
+        else:
+            retry_disconnected = getattr(broker, "retry_disconnected", None)
+            if callable(retry_disconnected):
+                await retry_disconnected()
+                conn_state = await broker.get_connection_state()
+            elif conn_state == ConnectionState.DISCONNECTED:
+                start = getattr(broker, "start", None)
+                if callable(start):
+                    await start()
+                conn_state = await broker.get_connection_state()
         delay_getter = getattr(broker, "current_backoff_delay", None)
         backoff_delay = delay_getter() if callable(delay_getter) else None
         statuses = await _broker_status_map(broker)

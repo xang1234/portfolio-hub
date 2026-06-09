@@ -27,6 +27,16 @@ class FakeAdapter:
         self._state = ConnectionState.CONNECTED
 
 
+class FakeRetryNowAdapter(FakeAdapter):
+    def __init__(self, *, state: ConnectionState) -> None:
+        super().__init__(state=state)
+        self.retry_now_calls = 0
+
+    async def retry_now(self) -> None:
+        self.retry_now_calls += 1
+        self._state = ConnectionState.CONNECTED
+
+
 def make_client(state: ConnectionState) -> tuple[TestClient, FakeAdapter]:
     from app.main import create_app
 
@@ -116,3 +126,17 @@ def test_post_healthz_retry_is_noop_when_reconnecting():
 
     assert response.status_code == 200
     assert adapter.start_calls == 0
+
+
+def test_post_healthz_retry_calls_retry_now_when_reconnecting():
+    from app.main import create_app
+
+    adapter = FakeRetryNowAdapter(state=ConnectionState.RECONNECTING)
+    client = TestClient(create_app(broker=adapter))
+
+    response = client.post("/healthz/retry")
+
+    assert response.status_code == 200
+    assert adapter.retry_now_calls == 1
+    assert adapter.start_calls == 0
+    assert "connected" in response.text
