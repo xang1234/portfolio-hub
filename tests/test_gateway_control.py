@@ -8,9 +8,10 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.broker import ConnectionState
 
-def _client():
-    from app.core.broker import ConnectionState
+
+def _client(*, broker=None):
     from app.main import create_app
 
     class FakeAdapter:
@@ -23,7 +24,31 @@ def _client():
         async def get_positions(self): return []
         async def get_account_summary(self): return []
 
-    return TestClient(create_app(broker=FakeAdapter()))
+    return TestClient(create_app(broker=broker or FakeAdapter()))
+
+
+class _RestartAwareAdapter:
+    name = "IBKR"
+
+    def __init__(self, *, state):
+        self._state = state
+        self.start_calls = 0
+        self.retry_now_calls = 0
+
+    async def connect(self): pass
+    async def disconnect(self): pass
+    async def is_connected(self): return self._state is ConnectionState.CONNECTED
+    async def get_connection_state(self): return self._state
+    async def get_positions(self): return []
+    async def get_account_summary(self): return []
+
+    async def start(self):
+        self.start_calls += 1
+        self._state = ConnectionState.CONNECTED
+
+    async def retry_now(self):
+        self.retry_now_calls += 1
+        self._state = ConnectionState.CONNECTED
 
 
 def test_restart_gateway_disabled_without_command(monkeypatch):
@@ -228,3 +253,36 @@ def test_admin_gateway_restart_endpoint_success(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "exit_code": 0}
+
+
+def test_admin_gateway_restart_endpoint_wakes_ibkr_retry_now(monkeypatch):
+    adapter = _RestartAwareAdapter(state=ConnectionState.RECONNECTING)
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
+    monkeypatch.setenv("IBKR_GATEWAY_RESTART_COMMAND", f"{sys.executable} -c \"pass\"")
+
+    response = _client(broker=adapter).post("/admin/ibkr-gateway/restart")
+
+    assert response.status_code == 200
+    assert adapter.retry_now_calls == 1
+    assert adapter.start_calls == 0
+    assert adapter._state is ConnectionState.CONNECTED
+
+
+def test_admin_gateway_restart_endpoint_wakes_ibkr_child_only(monkeypatch):
+    from app.core.composite_broker import CompositeBroker
+
+    ibkr = _RestartAwareAdapter(state=ConnectionState.DISCONNECTED)
+    futu = _RestartAwareAdapter(state=ConnectionState.DISCONNECTED)
+    futu.name = "Futu"
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
+    monkeypatch.setenv("IBKR_GATEWAY_RESTART_COMMAND", f"{sys.executable} -c \"pass\"")
+
+    response = _client(
+        broker=CompositeBroker([futu, ibkr]),
+    ).post("/admin/ibkr-gateway/restart")
+
+    assert response.status_code == 200
+    assert ibkr.retry_now_calls == 1
+    assert futu.retry_now_calls == 0

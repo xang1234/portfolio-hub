@@ -233,6 +233,23 @@ async def _broker_status_map(broker_ref: Broker) -> dict[str, str]:
     }
 
 
+async def _retry_broker_now(broker_ref: Broker) -> None:
+    retry_now = getattr(broker_ref, "retry_now", None)
+    if callable(retry_now):
+        await retry_now()
+        return
+
+    retry_disconnected = getattr(broker_ref, "retry_disconnected", None)
+    if callable(retry_disconnected):
+        await retry_disconnected()
+        return
+
+    if await broker_ref.get_connection_state() is ConnectionState.DISCONNECTED:
+        start = getattr(broker_ref, "start", None)
+        if callable(start):
+            await start()
+
+
 def _status_label(statuses: dict[str, str]) -> str:
     if len(statuses) <= 1:
         name = next(iter(statuses), "ibkr")
@@ -662,21 +679,8 @@ def create_app(
         Older brokers keep the disconnected-only start fallback.
         """
         broker = request.app.state.broker
+        await _retry_broker_now(broker)
         conn_state = await broker.get_connection_state()
-        retry_now = getattr(broker, "retry_now", None)
-        if callable(retry_now):
-            await retry_now()
-            conn_state = await broker.get_connection_state()
-        else:
-            retry_disconnected = getattr(broker, "retry_disconnected", None)
-            if callable(retry_disconnected):
-                await retry_disconnected()
-                conn_state = await broker.get_connection_state()
-            elif conn_state == ConnectionState.DISCONNECTED:
-                start = getattr(broker, "start", None)
-                if callable(start):
-                    await start()
-                conn_state = await broker.get_connection_state()
         delay_getter = getattr(broker, "current_backoff_delay", None)
         backoff_delay = delay_getter() if callable(delay_getter) else None
         statuses = await _broker_status_map(broker)
@@ -779,6 +783,12 @@ def create_app(
                 detail="gateway restart command failed",
             ) from exc
 
+        ibkr_broker = _ibkr_monitor_broker(request.app.state.broker)
+        if ibkr_broker is not None:
+            try:
+                await _retry_broker_now(ibkr_broker)
+            except Exception as exc:
+                _LOG.warning("gateway restart reconnect wake failed: %s", exc)
         return JSONResponse({"status": "ok", "exit_code": result.exit_code})
 
     @app.get("/api/equity-history")
