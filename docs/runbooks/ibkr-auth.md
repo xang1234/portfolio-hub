@@ -41,7 +41,7 @@ IBKR_GATEWAY_RESTART_TIMEOUT_S=30
 
 `IBKR_GATEWAY_RESTART_COMMAND` must be configured before Restart Gateway appears or works. Keep it blank to disable the control. Prefer pointing this at a host wrapper script; if that wrapper runs a Docker Compose restart command, keep that capability in the host/script environment rather than expanding dashboard container privileges.
 
-Restart Gateway also uses the existing admin route protection. It only works when admin auth is satisfied: set `ADMIN_TOKEN` and pass it as `X-Admin-Token`, or explicitly opt out for trusted local/dev use with `ADMIN_ALLOW_NO_AUTH=1`.
+Restart Gateway also uses the existing admin route protection. The dashboard button is visible only for trusted local/dev setups with `ADMIN_ALLOW_NO_AUTH=1`; token-header support for the dashboard UI is future work. API callers can still set `ADMIN_TOKEN` and pass it as `X-Admin-Token`.
 
 ## Retry Now vs Restart Gateway
 

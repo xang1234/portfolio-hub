@@ -3,6 +3,8 @@ DISCONNECTED, the badge becomes clickable so the user can kick off a
 fresh start() without restarting the container.
 """
 
+from html.parser import HTMLParser
+
 from fastapi.testclient import TestClient
 
 from app.core.broker import ConnectionState
@@ -45,6 +47,25 @@ def make_client(state: ConnectionState) -> tuple[TestClient, FakeAdapter]:
     return TestClient(app), adapter
 
 
+class _ButtonAttrsByPost(HTMLParser):
+    def __init__(self, hx_post: str) -> None:
+        super().__init__()
+        self._hx_post = hx_post
+        self.attrs: dict[str, str | None] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        current_attrs = dict(attrs)
+        if tag == "button" and current_attrs.get("hx-post") == self._hx_post:
+            self.attrs = current_attrs
+
+
+def _button_attrs_by_post(html: str, hx_post: str) -> dict[str, str | None]:
+    parser = _ButtonAttrsByPost(hx_post)
+    parser.feed(html)
+    assert parser.attrs is not None
+    return parser.attrs
+
+
 # Badge markup ----------------------------------------------------------------
 
 
@@ -75,12 +96,113 @@ def test_connected_badge_has_no_retry_action():
     assert "/healthz/retry" not in response.text
 
 
-def test_reconnecting_badge_has_no_retry_action():
-    """A loop is already running — don't expose a redundant button."""
+def test_reconnecting_badge_has_retry_action():
+    """RECONNECTING exposes retry_now so users can wake the loop immediately."""
     client, _ = make_client(ConnectionState.RECONNECTING)
     response = client.get("/healthz", headers={"HX-Request": "true"})
 
-    assert "/healthz/retry" not in response.text
+    assert "/healthz/retry" in response.text
+    assert "Retry now" in response.text
+
+
+def test_restart_action_is_hidden_when_not_configured(monkeypatch):
+    monkeypatch.setenv("IBKR_GATEWAY_RESTART_COMMAND", "   ")
+    monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    client, _ = make_client(ConnectionState.DISCONNECTED)
+    response = client.get("/healthz", headers={"HX-Request": "true"})
+
+    assert "/admin/ibkr-gateway/restart" not in response.text
+    assert "Restart Gateway" not in response.text
+
+
+def test_restart_action_is_hidden_when_token_auth_is_configured(monkeypatch):
+    monkeypatch.setenv("IBKR_GATEWAY_RESTART_COMMAND", "true")
+    monkeypatch.setenv("ADMIN_TOKEN", "s3cret")
+    monkeypatch.delenv("ADMIN_ALLOW_NO_AUTH", raising=False)
+    client, _ = make_client(ConnectionState.RECONNECTING)
+    response = client.get("/healthz", headers={"HX-Request": "true"})
+
+    assert "/admin/ibkr-gateway/restart" not in response.text
+    assert "Restart Gateway" not in response.text
+
+
+def test_restart_action_is_hidden_when_token_precedes_allow_no_auth(monkeypatch):
+    monkeypatch.setenv("IBKR_GATEWAY_RESTART_COMMAND", "true")
+    monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
+    monkeypatch.setenv("ADMIN_TOKEN", "s3cret")
+    client, _ = make_client(ConnectionState.RECONNECTING)
+    response = client.get("/healthz", headers={"HX-Request": "true"})
+
+    assert "/admin/ibkr-gateway/restart" not in response.text
+    assert "Restart Gateway" not in response.text
+
+
+def test_restart_action_is_hidden_when_whitespace_token_precedes_allow_no_auth(monkeypatch):
+    monkeypatch.setenv("IBKR_GATEWAY_RESTART_COMMAND", "true")
+    monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
+    monkeypatch.setenv("ADMIN_TOKEN", "   ")
+    client, _ = make_client(ConnectionState.RECONNECTING)
+    response = client.get("/healthz", headers={"HX-Request": "true"})
+
+    assert "/admin/ibkr-gateway/restart" not in response.text
+    assert "Restart Gateway" not in response.text
+
+
+def test_restart_action_is_hidden_when_admin_auth_is_not_satisfied(monkeypatch):
+    monkeypatch.setenv("IBKR_GATEWAY_RESTART_COMMAND", "true")
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("ADMIN_ALLOW_NO_AUTH", raising=False)
+    client, _ = make_client(ConnectionState.DISCONNECTED)
+    response = client.get("/healthz", headers={"HX-Request": "true"})
+
+    assert "/admin/ibkr-gateway/restart" not in response.text
+    assert "Restart Gateway" not in response.text
+
+
+def test_restart_action_is_shown_when_no_auth_admin_restart_is_configured(monkeypatch):
+    monkeypatch.setenv("IBKR_GATEWAY_RESTART_COMMAND", "true")
+    monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    client, _ = make_client(ConnectionState.RECONNECTING)
+    response = client.get("/healthz", headers={"HX-Request": "true"})
+
+    assert "/admin/ibkr-gateway/restart" in response.text
+    assert "Restart Gateway" in response.text
+
+
+def test_index_restart_action_uses_same_visibility_context(monkeypatch):
+    monkeypatch.setenv("IBKR_GATEWAY_RESTART_COMMAND", "true")
+    monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    client, _ = make_client(ConnectionState.RECONNECTING)
+    response = client.get("/")
+
+    assert "/admin/ibkr-gateway/restart" in response.text
+    assert "Restart Gateway" in response.text
+
+
+def test_index_restart_action_hides_when_token_precedes_allow_no_auth(monkeypatch):
+    monkeypatch.setenv("IBKR_GATEWAY_RESTART_COMMAND", "true")
+    monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
+    monkeypatch.setenv("ADMIN_TOKEN", "s3cret")
+    client, _ = make_client(ConnectionState.RECONNECTING)
+    response = client.get("/")
+
+    assert "/admin/ibkr-gateway/restart" not in response.text
+    assert "Restart Gateway" not in response.text
+
+
+def test_restart_action_does_not_swap_json_into_status_badge(monkeypatch):
+    monkeypatch.setenv("IBKR_GATEWAY_RESTART_COMMAND", "true")
+    monkeypatch.setenv("ADMIN_ALLOW_NO_AUTH", "1")
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    client, _ = make_client(ConnectionState.RECONNECTING)
+    response = client.get("/healthz", headers={"HX-Request": "true"})
+
+    restart_button = _button_attrs_by_post(response.text, "/admin/ibkr-gateway/restart")
+    assert restart_button.get("hx-swap") == "none"
+    assert "hx-target" not in restart_button
 
 
 # Endpoint behavior -----------------------------------------------------------

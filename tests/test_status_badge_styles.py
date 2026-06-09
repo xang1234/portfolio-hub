@@ -6,6 +6,7 @@ RECONNECTING state renders unstyled (background falls back to default text
 styling, which looks visually broken next to the green/red badges).
 """
 
+import re
 from pathlib import Path
 
 
@@ -25,3 +26,10 @@ def test_status_badge_has_disconnected_modifier_class():
 def test_status_badge_has_reconnecting_modifier_class():
     css = CSS_PATH.read_text()
     assert ".status-badge--reconnecting" in css
+
+
+def test_status_badge_has_compact_action_classes():
+    css = CSS_PATH.read_text()
+    assert re.search(r"(?m)^\.status-actions\s*\{", css)
+    assert re.search(r"(?m)^\.status-action\s*\{", css)
+    assert re.search(r"(?m)^\.status-action--danger\s*\{", css)

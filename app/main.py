@@ -316,6 +316,18 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _gateway_restart_enabled() -> bool:
+    return bool(os.environ.get("IBKR_GATEWAY_RESTART_COMMAND", "").strip())
+
+
+def _gateway_restart_visible() -> bool:
+    return (
+        _gateway_restart_enabled()
+        and _env_bool("ADMIN_ALLOW_NO_AUTH", False)
+        and os.environ.get("ADMIN_TOKEN", "") == ""
+    )
+
+
 def _env_optional_bool(name: str) -> bool | None:
     raw = os.environ.get(name)
     if raw is None or raw.strip() == "":
@@ -580,6 +592,7 @@ def create_app(
                     "state": state,
                     "backoff_delay": backoff_delay,
                     "broker_label": _status_label(statuses),
+                    "gateway_restart_visible": _gateway_restart_visible(),
                 },
             )
         return JSONResponse(statuses)
@@ -617,6 +630,7 @@ def create_app(
                 "state": _state_to_string(conn_state),
                 "backoff_delay": backoff_delay,
                 "broker_label": _status_label(statuses),
+                "gateway_restart_visible": _gateway_restart_visible(),
             },
         )
 
@@ -868,6 +882,7 @@ def create_app(
                 "all_known_brokers": _ALL_KNOWN_BROKERS,
                 "broker_states": broker_states,
                 "broker_label": _status_label(broker_states),
+                "gateway_restart_visible": _gateway_restart_visible(),
                 "updated_at_iso": datetime.now(timezone.utc).isoformat(),
             },
         )
