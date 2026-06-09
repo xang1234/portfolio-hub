@@ -4,6 +4,7 @@ import traceback
 import pytest
 
 from app.core.broker import ConnectionState
+from app.jobs.connection_monitor import ConnectionMonitorState
 
 
 class _FakeBroker:
@@ -46,7 +47,7 @@ async def test_reconnecting_transition_sends_one_message():
 
     broker = _FakeBroker(ConnectionState.CONNECTED)
     notifier = _CollectingNotifier()
-    state: dict = {}
+    state = ConnectionMonitorState()
 
     await poll_connection_once(
         broker,
@@ -69,12 +70,12 @@ async def test_reconnecting_transition_sends_one_message():
     assert "IBKR reconnecting" in notifier.messages[0]
 
 
-async def test_transition_state_advances_when_notifier_fails_once():
+async def test_transition_notification_retries_after_send_failure():
     from app.jobs.connection_monitor import poll_connection_once
 
     broker = _FakeBroker(ConnectionState.RECONNECTING)
     notifier = _FailOnceNotifier()
-    state: dict = {}
+    state = ConnectionMonitorState()
 
     with pytest.raises(RuntimeError, match="accepted then timed out"):
         await poll_connection_once(
@@ -89,12 +90,12 @@ async def test_transition_state_advances_when_notifier_fails_once():
         broker,
         notifier=notifier,
         state=state,
-        now_monotonic=10.0,
+        now_monotonic=20.0,
         attention_after_s=120.0,
     )
 
-    assert notifier.messages == ["IBKR reconnecting..."]
-    assert state["last_state"] is ConnectionState.RECONNECTING
+    assert notifier.messages == ["IBKR reconnecting...", "IBKR reconnecting..."]
+    assert state.last_state is ConnectionState.RECONNECTING
 
 
 async def test_long_unavailable_threshold_sends_one_attention_message():
@@ -102,7 +103,7 @@ async def test_long_unavailable_threshold_sends_one_attention_message():
 
     broker = _FakeBroker(ConnectionState.RECONNECTING)
     notifier = _CollectingNotifier()
-    state: dict = {}
+    state = ConnectionMonitorState()
 
     await poll_connection_once(
         broker,
@@ -133,16 +134,16 @@ async def test_long_unavailable_threshold_sends_one_attention_message():
     assert "dashboard retry/restart" in attention_messages[0]
 
 
-async def test_attention_state_advances_when_notifier_fails_once():
+async def test_attention_notification_retries_after_send_failure():
     from app.jobs.connection_monitor import poll_connection_once
 
     broker = _FakeBroker(ConnectionState.RECONNECTING)
     notifier = _FailOnceNotifier()
-    state = {
-        "last_state": ConnectionState.RECONNECTING,
-        "down_since": 0.0,
-        "attention_sent": False,
-    }
+    state = ConnectionMonitorState(
+        last_state=ConnectionState.RECONNECTING,
+        down_since=0.0,
+        attention_sent=False,
+    )
 
     with pytest.raises(RuntimeError, match="accepted then timed out"):
         await poll_connection_once(
@@ -157,13 +158,13 @@ async def test_attention_state_advances_when_notifier_fails_once():
         broker,
         notifier=notifier,
         state=state,
-        now_monotonic=240.0,
+        now_monotonic=250.0,
         attention_after_s=120.0,
     )
 
-    assert len(notifier.messages) == 1
-    assert "manual auth may be needed" in notifier.messages[0]
-    assert state["attention_sent"] is True
+    assert len(notifier.messages) == 2
+    assert all("manual auth may be needed" in msg for msg in notifier.messages)
+    assert state.attention_sent is True
 
 
 async def test_recovery_sends_one_message_and_resets_down_state():
@@ -171,7 +172,7 @@ async def test_recovery_sends_one_message_and_resets_down_state():
 
     broker = _FakeBroker(ConnectionState.DISCONNECTED)
     notifier = _CollectingNotifier()
-    state: dict = {}
+    state = ConnectionMonitorState()
 
     await poll_connection_once(
         broker,
@@ -199,8 +200,8 @@ async def test_recovery_sends_one_message_and_resets_down_state():
 
     recovery_messages = [msg for msg in notifier.messages if "IBKR recovered" in msg]
     assert len(recovery_messages) == 1
-    assert state.get("down_since") is None
-    assert state.get("attention_sent") is False
+    assert state.down_since is None
+    assert state.attention_sent is False
 
 
 async def test_repeated_same_state_poll_does_not_duplicate_transition_message():
@@ -208,7 +209,7 @@ async def test_repeated_same_state_poll_does_not_duplicate_transition_message():
 
     broker = _FakeBroker(ConnectionState.RECONNECTING)
     notifier = _CollectingNotifier()
-    state: dict = {}
+    state = ConnectionMonitorState()
 
     for now in (0.0, 10.0, 20.0):
         await poll_connection_once(
@@ -284,17 +285,17 @@ async def test_telegram_error_is_safe_to_log(monkeypatch):
 
 
 def test_env_float_rejects_non_finite_values(monkeypatch):
-    from app.main import _env_float
+    from app.core.ibkr_recovery import positive_env_float
 
     monkeypatch.setenv("CONNECTION_MONITOR_INTERVAL_S", "nan")
-    assert _env_float("CONNECTION_MONITOR_INTERVAL_S", 30.0) == 30.0
+    assert positive_env_float("CONNECTION_MONITOR_INTERVAL_S", 30.0) == 30.0
 
     monkeypatch.setenv("CONNECTION_MONITOR_INTERVAL_S", "inf")
-    assert _env_float("CONNECTION_MONITOR_INTERVAL_S", 30.0) == 30.0
+    assert positive_env_float("CONNECTION_MONITOR_INTERVAL_S", 30.0) == 30.0
 
 
 def test_ibkr_monitor_broker_selects_ibkr_child_from_composite():
-    from app.main import _ibkr_monitor_broker
+    from app.core.ibkr_recovery import select_ibkr_broker
 
     ibkr = _FakeBroker(ConnectionState.CONNECTED)
     ibkr.name = "IBKR"
@@ -302,16 +303,16 @@ def test_ibkr_monitor_broker_selects_ibkr_child_from_composite():
     futu.name = "Futu"
     composite = _CompositeLikeBroker([futu, ibkr])
 
-    assert _ibkr_monitor_broker(composite) is ibkr
+    assert select_ibkr_broker(composite) is ibkr
 
 
 def test_ibkr_monitor_broker_skips_composite_without_ibkr():
-    from app.main import _ibkr_monitor_broker
+    from app.core.ibkr_recovery import select_ibkr_broker
 
     futu = _FakeBroker(ConnectionState.DISCONNECTED)
     futu.name = "Futu"
 
-    assert _ibkr_monitor_broker(_CompositeLikeBroker([futu])) is None
+    assert select_ibkr_broker(_CompositeLikeBroker([futu])) is None
 
 
 async def test_monitor_loop_cancellation_reraises_cleanly():
