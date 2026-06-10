@@ -27,6 +27,15 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.core.broker import Broker, ConnectionState, Position
 from app.core.equity import build_equity_snapshot_row
+from app.core.ibkr_recovery import (
+    broker_status_map,
+    gateway_restart_visible_for_statuses,
+    positive_env_float,
+    restart_gateway_then_retry_ibkr,
+    retry_broker_now,
+    select_ibkr_broker,
+    state_to_string,
+)
 from app.core.live_positions import LivePositions, stream_events
 from app.render import _compute_totals, render_stream_payload
 from app.core.markets import (
@@ -202,34 +211,6 @@ _CONTENT_SECURITY_POLICY = "; ".join((
 
 def _is_htmx_request(request: Request) -> bool:
     return request.headers.get("HX-Request", "").lower() == "true"
-
-
-_STATE_STRINGS = {
-    ConnectionState.CONNECTED: "connected",
-    ConnectionState.RECONNECTING: "reconnecting",
-    ConnectionState.DISCONNECTED: "disconnected",
-}
-
-
-def _state_to_string(state: ConnectionState) -> str:
-    return _STATE_STRINGS[state]
-
-
-async def _broker_status_map(broker_ref: Broker) -> dict[str, str]:
-    """Return healthz JSON keyed by broker name.
-
-    Single adapters expose only get_connection_state(); CompositeBroker adds
-    get_connection_states() so clients can see which enabled broker is down.
-    """
-    states_getter = getattr(broker_ref, "get_connection_states", None)
-    if callable(states_getter):
-        states = await states_getter()
-        return {name.lower(): _state_to_string(state) for name, state in states.items()}
-    return {
-        getattr(broker_ref, "name", "broker").lower(): _state_to_string(
-            await broker_ref.get_connection_state()
-        )
-    }
 
 
 def _status_label(statuses: dict[str, str]) -> str:
@@ -434,10 +415,12 @@ def create_app(
 
     reconcile_task: asyncio.Task | None = None
     snapshot_task: asyncio.Task | None = None
+    connection_monitor_task: asyncio.Task | None = None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        nonlocal broker, store, fx_service, reconcile_task, snapshot_task
+        nonlocal broker, store, fx_service
+        nonlocal reconcile_task, snapshot_task, connection_monitor_task
         if manage_lifecycle:
             from app.core.fx import FxService
             from app.db.store import Store
@@ -493,9 +476,33 @@ def create_app(
                 scheduled_snapshot_loop(broker, store, market_hours),
             )
             snapshot_task.add_done_callback(_log_loop_crash("equity snapshot"))
+
+            from app.core.notifications import build_notifier
+            from app.jobs.connection_monitor import monitor_connection
+
+            ibkr_broker = select_ibkr_broker(broker)
+            if ibkr_broker is not None:
+                notifier = build_notifier()
+                connection_monitor_task = asyncio.create_task(
+                    monitor_connection(
+                        ibkr_broker,
+                        notifier=notifier,
+                        interval_s=positive_env_float(
+                            "CONNECTION_MONITOR_INTERVAL_S",
+                            30.0,
+                        ),
+                        attention_after_s=positive_env_float(
+                            "IBKR_AUTH_ATTENTION_AFTER_S", 120.0,
+                        ),
+                    ),
+                )
+                connection_monitor_task.add_done_callback(
+                    _log_loop_crash("connection monitor"),
+                )
+                app.state.connection_monitor_task = connection_monitor_task
         yield
         if manage_lifecycle:
-            for t in (reconcile_task, snapshot_task):
+            for t in (reconcile_task, snapshot_task, connection_monitor_task):
                 if t is not None and not t.done():
                     t.cancel()
                     try:
@@ -567,8 +574,8 @@ def create_app(
     async def healthz(request: Request):
         broker_ref = request.app.state.broker
         conn_state = await broker_ref.get_connection_state()
-        state = _state_to_string(conn_state)
-        statuses = await _broker_status_map(broker_ref)
+        state = state_to_string(conn_state)
+        statuses = await broker_status_map(broker_ref)
         if _is_htmx_request(request):
             # Adapters can opt in to exposing reconnect backoff with this shape.
             delay_getter = getattr(broker_ref, "current_backoff_delay", None)
@@ -580,40 +587,36 @@ def create_app(
                     "state": state,
                     "backoff_delay": backoff_delay,
                     "broker_label": _status_label(statuses),
+                    "gateway_restart_visible": gateway_restart_visible_for_statuses(
+                        statuses,
+                    ),
                 },
             )
         return JSONResponse(statuses)
 
     @app.post("/healthz/retry")
     async def healthz_retry(request: Request):
-        """Manual retry hook for the DISCONNECTED state.
+        """Manual retry hook for stalled broker connection states.
 
-        Only acts when the adapter is genuinely DISCONNECTED — clicking on
-        a CONNECTED adapter would tear down the live session, and clicking
-        on RECONNECTING would spawn a parallel loop. In both cases we just
-        re-render the current badge.
+        Modern adapters may expose retry_now() to wake reconnecting loops.
+        Older brokers keep the disconnected-only start fallback.
         """
         broker = request.app.state.broker
+        await retry_broker_now(broker)
         conn_state = await broker.get_connection_state()
-        retry_disconnected = getattr(broker, "retry_disconnected", None)
-        if callable(retry_disconnected):
-            await retry_disconnected()
-            conn_state = await broker.get_connection_state()
-        elif conn_state == ConnectionState.DISCONNECTED:
-            start = getattr(broker, "start", None)
-            if callable(start):
-                await start()
-            conn_state = await broker.get_connection_state()
         delay_getter = getattr(broker, "current_backoff_delay", None)
         backoff_delay = delay_getter() if callable(delay_getter) else None
-        statuses = await _broker_status_map(broker)
+        statuses = await broker_status_map(broker)
         return templates.TemplateResponse(
             request=request,
             name="partials/status_badge.html",
             context={
-                "state": _state_to_string(conn_state),
+                "state": state_to_string(conn_state),
                 "backoff_delay": backoff_delay,
                 "broker_label": _status_label(statuses),
+                "gateway_restart_visible": gateway_restart_visible_for_statuses(
+                    statuses,
+                ),
             },
         )
 
@@ -674,6 +677,35 @@ def create_app(
             if await store.insert_equity_snapshot(**row):
                 inserted += 1
         return JSONResponse({"inserted": inserted})
+
+    @app.post("/admin/ibkr-gateway/restart")
+    async def admin_ibkr_gateway_restart(request: Request):
+        """Protected opt-in hook for restarting IB Gateway."""
+        _require_admin_token(request)
+
+        from app.core.gateway_control import (
+            GatewayRestartDisabled,
+            GatewayRestartFailed,
+        )
+
+        try:
+            result = await restart_gateway_then_retry_ibkr(request.app.state.broker)
+        except GatewayRestartDisabled as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except GatewayRestartFailed as exc:
+            _LOG.warning(
+                "gateway restart command failed: %s exit_code=%s stdout_len=%s stderr_len=%s",
+                exc,
+                exc.exit_code,
+                len(exc.stdout),
+                len(exc.stderr),
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="gateway restart command failed",
+            ) from exc
+
+        return JSONResponse({"status": "ok", "exit_code": result.exit_code})
 
     @app.get("/api/equity-history")
     async def equity_history(request: Request, account: str | None = None, days: int = 60):
@@ -752,8 +784,8 @@ def create_app(
         broker = request.app.state.broker
         live = request.app.state.live_positions
         conn_state = await broker.get_connection_state()
-        state = _state_to_string(conn_state)
-        broker_states = await _broker_status_map(broker)
+        state = state_to_string(conn_state)
+        broker_states = await broker_status_map(broker)
         delay_getter = getattr(broker, "current_backoff_delay", None)
         backoff_delay = delay_getter() if callable(delay_getter) else None
         # Prefer the live, tick-updated snapshot when it has data; otherwise
@@ -835,6 +867,9 @@ def create_app(
                 "all_known_brokers": _ALL_KNOWN_BROKERS,
                 "broker_states": broker_states,
                 "broker_label": _status_label(broker_states),
+                "gateway_restart_visible": gateway_restart_visible_for_statuses(
+                    broker_states,
+                ),
                 "updated_at_iso": datetime.now(timezone.utc).isoformat(),
             },
         )

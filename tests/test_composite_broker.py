@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from app.core.broker import AccountSummary, ConnectionState, Position
@@ -69,6 +71,36 @@ class _Adapter:
 
     def current_backoff_delay(self):
         return self._backoff_delay
+
+
+class _RetryNowAdapter(_Adapter):
+    def __init__(self, name, **kwargs):
+        super().__init__(name, **kwargs)
+        self.retry_now_calls = 0
+
+    async def retry_now(self):
+        self.retry_now_calls += 1
+        self._state = ConnectionState.CONNECTED
+
+
+class _FailingRetryNowAdapter(_Adapter):
+    def __init__(self, name, **kwargs):
+        super().__init__(name, **kwargs)
+        self.retry_now_calls = 0
+
+    async def retry_now(self):
+        self.retry_now_calls += 1
+        raise RuntimeError("retry unavailable")
+
+
+class _CancellingRetryNowAdapter(_Adapter):
+    def __init__(self, name, **kwargs):
+        super().__init__(name, **kwargs)
+        self.retry_now_calls = 0
+
+    async def retry_now(self):
+        self.retry_now_calls += 1
+        raise asyncio.CancelledError()
 
 
 @pytest.mark.asyncio
@@ -283,3 +315,61 @@ def test_healthz_retry_restarts_disconnected_child_in_composite_broker():
     assert ibkr.started is False
     assert futu.started is True
     assert "connected" in response.text
+
+
+def test_healthz_retry_wakes_reconnecting_child_in_composite_broker():
+    from fastapi.testclient import TestClient
+
+    from app.core.composite_broker import CompositeBroker
+    from app.main import create_app
+
+    ibkr = _Adapter("IBKR", state=ConnectionState.CONNECTED)
+    futu = _RetryNowAdapter("Futu", state=ConnectionState.RECONNECTING)
+    app = create_app(broker=CompositeBroker([ibkr, futu]))
+
+    response = TestClient(app).post("/healthz/retry")
+
+    assert response.status_code == 200
+    assert ibkr.started is False
+    assert futu.retry_now_calls == 1
+    assert futu.started is False
+    assert "connected" in response.text
+
+
+def test_healthz_retry_isolates_child_retry_failures_in_composite_broker(caplog):
+    from fastapi.testclient import TestClient
+
+    from app.core.composite_broker import CompositeBroker
+    from app.main import create_app
+
+    ibkr = _Adapter("IBKR", state=ConnectionState.CONNECTED)
+    futu = _FailingRetryNowAdapter("Futu", state=ConnectionState.RECONNECTING)
+    tiger = _Adapter(
+        "Tiger",
+        state=ConnectionState.DISCONNECTED,
+        start_state=ConnectionState.CONNECTED,
+    )
+    app = create_app(broker=CompositeBroker([ibkr, futu, tiger]))
+
+    with caplog.at_level("WARNING", logger="app.core.composite_broker"):
+        response = TestClient(app).post("/healthz/retry")
+
+    assert response.status_code == 200
+    assert futu.retry_now_calls == 1
+    assert tiger.started is True
+    assert "Futu retry_now failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_composite_broker_retry_now_propagates_child_cancellation(caplog):
+    from app.core.composite_broker import CompositeBroker
+
+    futu = _CancellingRetryNowAdapter("Futu", state=ConnectionState.RECONNECTING)
+    broker = CompositeBroker([futu])
+
+    with caplog.at_level("WARNING", logger="app.core.composite_broker"):
+        with pytest.raises(asyncio.CancelledError):
+            await broker.retry_now()
+
+    assert futu.retry_now_calls == 1
+    assert "Futu retry_now failed" not in caplog.text

@@ -134,6 +134,8 @@ class IbkrAdapter:
         self._prev_close_refresh_task: asyncio.Task | None = None
         self._connection_state: ConnectionState = ConnectionState.DISCONNECTED
         self._reconnect_task: asyncio.Task | None = None
+        self._reconnect_wakeup: asyncio.Event | None = None
+        self._disconnecting = False
         # Hooks invoked once per successful reconnect (see on_reconnected).
         # Each callback gets the fresh IB instance as its only argument.
         self._reconnect_hooks: list[Callable[[object], None]] = []
@@ -240,34 +242,70 @@ class IbkrAdapter:
         self._connection_state = ConnectionState.CONNECTED
 
     async def disconnect(self) -> None:
-        # Cancel any in-flight reconnect loop first so it can't race ahead and
-        # re-open the connection right after we close it.
-        task = self._reconnect_task
-        self._reconnect_task = None
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
-        # Drain any in-flight fill INSERTs before tearing down so we don't
-        # orphan the last few writes during a graceful shutdown.
-        if self._pending_writes:
-            await asyncio.gather(*self._pending_writes, return_exceptions=True)
-        if self._ib is None:
+        self._disconnecting = True
+        try:
+            # Cancel any in-flight reconnect loop first so it can't race ahead and
+            # re-open the connection right after we close it.
+            task = self._reconnect_task
+            self._reconnect_task = None
+            self._discard_reconnect_wakeup()
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as exc:
+                    _LOG.debug(
+                        "Reconnect task raised during disconnect: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                self._discard_reconnect_wakeup()
+            # Drain any in-flight fill INSERTs before tearing down so we don't
+            # orphan the last few writes during a graceful shutdown.
+            if self._pending_writes:
+                await asyncio.gather(*self._pending_writes, return_exceptions=True)
+            if self._ib is None:
+                self._connection_state = ConnectionState.DISCONNECTED
+                return
+            portfolio_event = getattr(self._ib, "updatePortfolioEvent", None)
+            if portfolio_event is not None:
+                try:
+                    portfolio_event -= self._on_portfolio_update
+                except Exception as exc:
+                    _LOG.debug(
+                        "Failed to detach updatePortfolioEvent during disconnect: %s",
+                        exc,
+                        exc_info=True,
+                    )
+            if self._live_positions is not None:
+                self._stop_streaming()
+            self._ib.disconnect()
+            self._ib = None
             self._connection_state = ConnectionState.DISCONNECTED
+        finally:
+            self._discard_reconnect_wakeup()
+            self._disconnecting = False
+
+    async def retry_now(self) -> None:
+        """Operator-triggered immediate reconnect attempt.
+
+        CONNECTED: no-op.
+        RECONNECTING: wake the current backoff sleep.
+        DISCONNECTED: start the same reconnect path used after initial failure.
+        """
+        if self._disconnecting or self._connection_state == ConnectionState.CONNECTED:
             return
-        portfolio_event = getattr(self._ib, "updatePortfolioEvent", None)
-        if portfolio_event is not None:
-            try:
-                portfolio_event -= self._on_portfolio_update
-            except Exception:
-                pass
-        if self._live_positions is not None:
-            self._stop_streaming()
-        self._ib.disconnect()
-        self._ib = None
-        self._connection_state = ConnectionState.DISCONNECTED
+
+        self._reconnect_wakeup_event().set()
+        if self._connection_state == ConnectionState.DISCONNECTED:
+            self._handle_disconnect()
+        elif (
+            self._connection_state == ConnectionState.RECONNECTING
+            and (self._reconnect_task is None or self._reconnect_task.done())
+        ):
+            self._reconnect_task = asyncio.create_task(self._reconnect_loop())
 
     async def is_connected(self) -> bool:
         return self._ib is not None and self._ib.isConnected()
@@ -943,6 +981,8 @@ class IbkrAdapter:
         the two and re-write the Position with `last_price_is_stale=False`,
         masking the disconnect from the user.
         """
+        if self._disconnecting:
+            return
         if self._connection_state == ConnectionState.RECONNECTING:
             return
         self._connection_state = ConnectionState.RECONNECTING
@@ -951,6 +991,23 @@ class IbkrAdapter:
         self._mark_live_positions_stale()
         if self._reconnect_task is None or self._reconnect_task.done():
             self._reconnect_task = asyncio.create_task(self._reconnect_loop())
+
+    def _reconnect_wakeup_event(self) -> asyncio.Event:
+        if self._reconnect_wakeup is None:
+            self._reconnect_wakeup = asyncio.Event()
+        return self._reconnect_wakeup
+
+    def _discard_reconnect_wakeup(self) -> None:
+        self._reconnect_wakeup = None
+
+    async def _wait_for_reconnect_delay(self, delay: float) -> None:
+        wakeup = self._reconnect_wakeup_event()
+        try:
+            await asyncio.wait_for(wakeup.wait(), timeout=delay)
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            wakeup.clear()
 
     def _deregister_tick_handlers(self) -> None:
         """Unbind _on_ticker_update from every live ticker without touching IB.
@@ -1004,45 +1061,46 @@ class IbkrAdapter:
         If the task is cancelled (explicit disconnect()), exits silently.
         """
         try:
-            for attempt, delay in enumerate(self._reconnect_delays, start=1):
-                # `attempt` is 1-indexed, so `_reconnect_delays[attempt]` is
-                # the delay AFTER this one (or end-of-schedule).
-                next_after = (
-                    self._reconnect_delays[attempt]
-                    if attempt < len(self._reconnect_delays)
-                    else None
-                )
-                _LOG.info(
-                    "Reconnect attempt %d will fire in %.1fs (next delay: %s)",
-                    attempt, delay,
-                    f"{next_after:.1f}s" if next_after is not None else "exhausted",
-                )
-                self._current_backoff_delay = delay
-                await asyncio.sleep(delay)
-                if self._connection_state == ConnectionState.CONNECTED:
-                    # Something else reconnected us (manual connect()), stop.
-                    return
-                try:
-                    # Tear down any stale IB ref before trying fresh
-                    self._ib = None
-                    self._streaming.clear()
-                    await self.connect()
-                    _LOG.info("Reconnect attempt %d succeeded", attempt)
-                    self._current_backoff_delay = None
-                    self._fire_reconnect_hooks()
-                    return
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    _LOG.warning("Reconnect attempt %d failed: %s", attempt, exc)
-                    continue
-            _LOG.error("Backoff exhausted after %d attempts; staying DISCONNECTED", len(self._reconnect_delays))
-            self._connection_state = ConnectionState.DISCONNECTED
+            try:
+                for attempt, delay in enumerate(self._reconnect_delays, start=1):
+                    # `attempt` is 1-indexed, so `_reconnect_delays[attempt]` is
+                    # the delay AFTER this one (or end-of-schedule).
+                    next_after = (
+                        self._reconnect_delays[attempt]
+                        if attempt < len(self._reconnect_delays)
+                        else None
+                    )
+                    _LOG.info(
+                        "Reconnect attempt %d will fire in %.1fs (next delay: %s)",
+                        attempt, delay,
+                        f"{next_after:.1f}s" if next_after is not None else "exhausted",
+                    )
+                    self._current_backoff_delay = delay
+                    await self._wait_for_reconnect_delay(delay)
+                    if self._connection_state == ConnectionState.CONNECTED:
+                        # Something else reconnected us (manual connect()), stop.
+                        return
+                    try:
+                        # Tear down any stale IB ref before trying fresh
+                        self._ib = None
+                        self._streaming.clear()
+                        await self.connect()
+                        _LOG.info("Reconnect attempt %d succeeded", attempt)
+                        self._fire_reconnect_hooks()
+                        return
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        _LOG.warning("Reconnect attempt %d failed: %s", attempt, exc)
+                        continue
+                _LOG.error("Backoff exhausted after %d attempts; staying DISCONNECTED", len(self._reconnect_delays))
+                self._connection_state = ConnectionState.DISCONNECTED
+            except asyncio.CancelledError:
+                _LOG.info("Reconnect loop cancelled")
+                raise
+        finally:
             self._current_backoff_delay = None
-        except asyncio.CancelledError:
-            _LOG.info("Reconnect loop cancelled")
-            self._current_backoff_delay = None
-            raise
+            self._discard_reconnect_wakeup()
 
     # ---- streaming (slice 4) ------------------------------------------------
 

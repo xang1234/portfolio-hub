@@ -41,6 +41,31 @@ class CompositeBroker:
             )
         )
 
+    async def retry_now(self) -> None:
+        """Wake reconnecting children and start disconnected children."""
+        states = await self.get_connection_states()
+        operations = []
+        for adapter in self._adapters:
+            state = states.get(adapter.name)
+            if state is ConnectionState.RECONNECTING:
+                retry_now = getattr(adapter, "retry_now", None)
+                if callable(retry_now):
+                    operations.append((adapter, "retry_now", retry_now()))
+            elif state is ConnectionState.DISCONNECTED:
+                operations.append((adapter, "start", self._start_one(adapter)))
+        if not operations:
+            return
+
+        results = await asyncio.gather(
+            *(operation for _, _, operation in operations),
+            return_exceptions=True,
+        )
+        for (adapter, action, _), result in zip(operations, results, strict=False):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if isinstance(result, Exception):
+                _LOG.warning("%s %s failed: %s", adapter.name, action, result)
+
     async def disconnect(self) -> None:
         await asyncio.gather(
             *(self._disconnect_one(adapter) for adapter in self._adapters),

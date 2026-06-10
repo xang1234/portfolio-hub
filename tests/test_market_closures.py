@@ -333,15 +333,18 @@ def test_closures_this_week_sorts_by_date_then_exchange():
 # ============================================================================
 
 
-def _client(positions):
+def _client(positions, *, now=None):
     from app.main import create_app
-    return TestClient(create_app(broker=_Fake(positions)))
+    market_hours = None
+    if now is not None:
+        market_hours = MarketHours(clock=lambda: now)
+    return TestClient(create_app(broker=_Fake(positions), market_hours=market_hours))
 
 
 def test_closures_section_renders_inside_market_section_closures():
     """Held US position; assert the closures strip appears as a sibling
     section with the dedicated `.market-section--closures` class."""
-    text = _client([_stk()]).get("/").text
+    text = _client([_stk()], now=_utc(2025, 6, 30, 12, 0)).get("/").text
     # The strip's container class — distinct from the live market rail
     assert 'market-section--closures' in text
 

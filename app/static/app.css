@@ -278,11 +278,35 @@ main.container > * + * { margin-top: 18px; }
 .status-badge--connected    { background: var(--ph-pos-soft);  color: var(--ph-pos);  }
 .status-badge--reconnecting  { background: var(--ph-warn-soft); color: var(--ph-warn); }
 .status-badge--disconnected  { background: var(--ph-neg-soft);  color: var(--ph-neg);  }
-button.status-badge--retry {
-  border-color: color-mix(in srgb, var(--ph-neg) 40%, transparent);
-  cursor: pointer; font-family: inherit;
+
+.status-actions {
+  display: inline-flex; align-items: center; gap: 6px;
+  flex-wrap: wrap;
 }
-button.status-badge--retry:hover { background: color-mix(in srgb, var(--ph-neg) 22%, transparent); }
+.status-action {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 24px; margin: 0; padding: 0.18rem 0.52rem;
+  border: 1px solid color-mix(in srgb, var(--ph-warn) 38%, transparent);
+  border-radius: var(--ph-pill);
+  background: var(--ph-surface-2); color: var(--ph-text-2);
+  font: inherit; font-size: 12px; font-weight: 650; line-height: 1.2;
+  white-space: nowrap; cursor: pointer;
+}
+.status-action:hover {
+  border-color: color-mix(in srgb, var(--ph-warn) 58%, transparent);
+  background: var(--ph-warn-soft); color: var(--ph-text);
+}
+.status-action:focus-visible {
+  outline: 2px solid var(--ph-accent); outline-offset: 2px;
+}
+.status-action--danger {
+  border-color: color-mix(in srgb, var(--ph-neg) 38%, transparent);
+  color: var(--ph-neg);
+}
+.status-action--danger:hover {
+  border-color: color-mix(in srgb, var(--ph-neg) 58%, transparent);
+  background: var(--ph-neg-soft); color: var(--ph-neg);
+}
 
 /* The cluster is transparent so the pill participates in the .app-bar flex
    row directly and the banner wraps onto its own row beneath. HTMX still
