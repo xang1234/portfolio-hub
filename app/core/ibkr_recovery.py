@@ -56,6 +56,10 @@ async def retry_broker_now(broker_ref: Broker) -> None:
         start = getattr(broker_ref, "start", None)
         if callable(start):
             await start()
+            return
+        connect = getattr(broker_ref, "connect", None)
+        if callable(connect):
+            await connect()
 
 
 def select_ibkr_broker(broker: Broker) -> Broker | None:

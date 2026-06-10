@@ -157,7 +157,6 @@ Telegram alerts should fire when:
 - IBKR remains unavailable for more than 2 minutes.
 - IBKR reaches disconnected/backoff-exhausted.
 - IBKR recovers.
-```
 
 - [ ] **Step 5: Verify compose renders**
 

@@ -39,6 +39,24 @@ class FakeRetryNowAdapter(FakeAdapter):
         self._state = ConnectionState.CONNECTED
 
 
+class ConnectOnlyAdapter:
+    name = "IBKR"
+
+    def __init__(self, *, state: ConnectionState) -> None:
+        self._state = state
+        self.connect_calls = 0
+
+    async def connect(self) -> None:
+        self.connect_calls += 1
+        self._state = ConnectionState.CONNECTED
+
+    async def disconnect(self) -> None: pass
+    async def is_connected(self) -> bool: return self._state == ConnectionState.CONNECTED
+    async def get_connection_state(self) -> ConnectionState: return self._state
+    async def get_positions(self): return []
+    async def get_account_summary(self): return []
+
+
 def make_client(state: ConnectionState) -> tuple[TestClient, FakeAdapter]:
     from app.main import create_app
 
@@ -253,6 +271,19 @@ def test_post_healthz_retry_calls_start_when_disconnected():
 
     assert response.status_code == 200
     assert adapter.start_calls == 1
+
+
+def test_post_healthz_retry_calls_connect_when_start_absent():
+    from app.main import create_app
+
+    adapter = ConnectOnlyAdapter(state=ConnectionState.DISCONNECTED)
+    client = TestClient(create_app(broker=adapter))
+
+    response = client.post("/healthz/retry")
+
+    assert response.status_code == 200
+    assert adapter.connect_calls == 1
+    assert "connected" in response.text
 
 
 def test_post_healthz_retry_returns_updated_badge_fragment():

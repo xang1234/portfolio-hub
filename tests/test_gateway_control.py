@@ -2,6 +2,7 @@ import asyncio
 import errno
 import logging
 import os
+import shlex
 import sys
 import time
 
@@ -166,15 +167,10 @@ def test_restart_gateway_timeout_kills_descendant_process_group(tmp_path, monkey
     from app.core.gateway_control import GatewayRestartFailed, restart_gateway
 
     pid_file = tmp_path / "grandchild.pid"
-    command = (
-        f"{sys.executable} -c "
-        f"\"import subprocess, sys, time; from pathlib import Path; "
-        f"p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
-        f"Path({str(pid_file)!r}).write_text(str(p.pid)); "
-        f"time.sleep(30)\""
-    )
+    script = f"sleep 30 & echo $! > {shlex.quote(str(pid_file))}; sleep 30"
+    command = f"/bin/sh -c {shlex.quote(script)}"
     monkeypatch.setenv("IBKR_GATEWAY_RESTART_COMMAND", command)
-    monkeypatch.setenv("IBKR_GATEWAY_RESTART_TIMEOUT_S", "0.2")
+    monkeypatch.setenv("IBKR_GATEWAY_RESTART_TIMEOUT_S", "1")
 
     with pytest.raises(GatewayRestartFailed, match="timed out"):
         asyncio.run(restart_gateway())

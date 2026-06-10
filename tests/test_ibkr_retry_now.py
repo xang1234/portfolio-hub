@@ -1,6 +1,7 @@
 """Operator-triggered immediate IBKR reconnect retry."""
 
 import asyncio
+import logging
 
 from app.core.broker import ConnectionState
 
@@ -48,6 +49,11 @@ class FakeIB:
     def simulate_disconnect(self):
         self._connected = False
         self.disconnectedEvent.emit()
+
+
+class _FailingRemoveEvent:
+    def __isub__(self, cb):
+        raise RuntimeError("detach failed")
 
 
 def make_adapter(fake_ib, *, reconnect_delays=None):
@@ -162,6 +168,40 @@ async def test_disconnect_ignores_disconnect_event_emitted_by_ib_disconnect():
     await asyncio.sleep(0.05)
     assert fake_ib.connect_attempts == attempts_after_initial_connect
     assert await adapter.get_connection_state() == ConnectionState.DISCONNECTED
+
+
+async def test_disconnect_logs_reconnect_task_errors(caplog):
+    fake_ib = FakeIB()
+    adapter = make_adapter(fake_ib, reconnect_delays=[0.02])
+    await adapter.connect()
+
+    async def failing_cancel_task():
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError as exc:
+            raise RuntimeError("cancel cleanup failed") from exc
+
+    adapter._reconnect_task = asyncio.create_task(failing_cancel_task())
+    await asyncio.sleep(0)
+    caplog.set_level(logging.DEBUG, logger="app.adapters.ibkr")
+
+    await adapter.disconnect()
+
+    assert "Reconnect task raised during disconnect" in caplog.text
+    assert "cancel cleanup failed" in caplog.text
+
+
+async def test_disconnect_logs_portfolio_event_detach_errors(caplog):
+    fake_ib = FakeIB()
+    adapter = make_adapter(fake_ib, reconnect_delays=[0.02])
+    await adapter.connect()
+    fake_ib.updatePortfolioEvent = _FailingRemoveEvent()
+    caplog.set_level(logging.DEBUG, logger="app.adapters.ibkr")
+
+    await adapter.disconnect()
+
+    assert "Failed to detach updatePortfolioEvent during disconnect" in caplog.text
+    assert "detach failed" in caplog.text
 
 
 async def test_reconnect_loop_cleans_up_when_state_becomes_connected_while_waiting():

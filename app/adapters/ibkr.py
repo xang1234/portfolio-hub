@@ -253,8 +253,14 @@ class IbkrAdapter:
                 task.cancel()
                 try:
                     await task
-                except (asyncio.CancelledError, Exception):
+                except asyncio.CancelledError:
                     pass
+                except Exception as exc:
+                    _LOG.debug(
+                        "Reconnect task raised during disconnect: %s",
+                        exc,
+                        exc_info=True,
+                    )
                 self._discard_reconnect_wakeup()
             # Drain any in-flight fill INSERTs before tearing down so we don't
             # orphan the last few writes during a graceful shutdown.
@@ -267,8 +273,12 @@ class IbkrAdapter:
             if portfolio_event is not None:
                 try:
                     portfolio_event -= self._on_portfolio_update
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _LOG.debug(
+                        "Failed to detach updatePortfolioEvent during disconnect: %s",
+                        exc,
+                        exc_info=True,
+                    )
             if self._live_positions is not None:
                 self._stop_streaming()
             self._ib.disconnect()
